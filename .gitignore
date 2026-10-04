@@ -1,0 +1,63 @@
+# SwiftPM and build output
+.build/
+.swiftpm/
+build/
+dist/
+DerivedData/
+*.app/
+*.dSYM/
+*.xcarchive/
+*.xcresult/
+*.ipa
+*.dmg
+*.pkg
+
+# Xcode user settings; shared schemes and Package.resolved remain versioned
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+
+# Local editor and agent settings
+/.codex/
+/.idea/
+/.vscode/
+*.swp
+*.swo
+*~
+
+# macOS metadata
+.DS_Store
+._*
+.Spotlight-V100/
+.Trashes/
+
+# Local environment and credentials; sanitized templates may be committed
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+secrets/
+credentials/
+*.secret
+*.key
+*.pem
+*.p8
+*.p12
+*.pfx
+*.mobileprovision
+*.provisionprofile
+*.keychain
+*.keychain-db
+credentials.json
+secrets.json
+configuration.json
+
+# Public Hue trust anchors are required app resources, not private keys
+!/HomeControl/Resources/HueRootCA.pem
+
+# Local logs and network captures may contain device or account data
+*.log
+*.pcap
+*.pcapng
