@@ -2,65 +2,78 @@ import SwiftUI
 
 struct DevicePanel: View {
     var store: HomeStore
+    var presentation: PanelPresentation
+    var maximumHeight: CGFloat = 700
+    var heightChanged: (CGFloat) -> Void = { _ in }
     var openSettings: (DeviceKind?) -> Void
+    @State private var headerHeight: CGFloat = 64
+    @State private var contentHeight: CGFloat = 400
+    private var panelHeight: CGFloat { min(maximumHeight, headerHeight + contentHeight) }
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Label("Home Control", systemImage: "house.fill").font(.headline)
-                Spacer()
-                Button { openSettings(nil) } label: { Image(systemName: "gearshape") }
-                    .buttonStyle(.borderless).help("Settings…").accessibilityLabel("Settings")
-            }.padding()
-            Divider()
+            header
+                .onGeometryChange(for: CGFloat.self) { ceil($0.size.height) } action: { headerHeight = $0 }
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    HStack(spacing: 12) {
-                        sensor("Temperature", symbol: "thermometer.medium", reading: store.dyson.temperature, unit: "°C", fraction: 1)
-                        sensor("Humidity", symbol: "humidity", reading: store.dyson.humidity, unit: "%", fraction: 0)
-                    }
+                VStack(alignment: .leading, spacing: 16) {
                     if let error = store.storageError { ErrorNotice(message: error) }
-                    GroupBox {
+                    if !store.visibleScenes.isEmpty { HueScenesView(store: store) }
+                    lightsSection
+                    Divider()
+                    if store.configuration.dyson == nil {
                         VStack(alignment: .leading, spacing: 12) {
-                            if store.configuration.hue == nil {
-                                placeholder("Connect your Hue Bridge to control your lights.", kind: .hue)
-                            } else if store.lights.isEmpty {
-                                Text(store.hueState == .online ? "No lights found on this bridge." : "Waiting for your Hue Bridge…").foregroundStyle(.secondary)
-                            } else {
-                                ForEach(store.lights) { light in
-                                    HueLightRow(light: light, enabled: store.hueState == .online && light.reachable && !store.pendingLights.contains(light.id), pending: store.pendingLights.contains(light.id)) { on, brightness in
-                                        store.setLight(light, on: on, brightness: brightness)
-                                    }
-                                    if light.id != store.lights.last?.id { Divider() }
-                                }
-                            }
-                            if let error = store.hueError { ErrorNotice(message: error) }
-                        }.frame(maxWidth: .infinity, alignment: .leading).padding(4)
-                    } label: { sectionLabel("Philips Hue", symbol: "lightbulb", state: store.hueState) }
-                    GroupBox {
-                        VStack(alignment: .leading, spacing: 12) {
-                            if store.configuration.dyson == nil {
-                                placeholder("Connect your Dyson TP07 to monitor and control the air purifier.", kind: .dyson)
-                            } else {
-                                Toggle("Power", isOn: Binding(get: { store.dyson.isOn }, set: { store.setDyson(["fpwr": $0 ? "ON" : "OFF"]) }))
-                                Toggle("Auto", isOn: Binding(get: { store.dyson.autoMode }, set: { store.setDyson(["auto": $0 ? "ON" : "OFF"]) }))
-                                DysonSpeedControl(speed: store.dyson.speed, autoMode: store.dyson.autoMode) { speed in
-                                    store.setDyson(["auto": "OFF", "fpwr": "ON", "fnsp": String(format: "%04d", speed)])
-                                }
-                                if store.dysonPending { ProgressView().controlSize(.small).accessibilityLabel("Waiting for device confirmation") }
-                            }
-                            if let error = store.dysonError { ErrorNotice(message: error) }
-                        }.disabled(store.configuration.dyson != nil && (store.dysonState != .online || store.dysonPending))
-                            .frame(maxWidth: .infinity, alignment: .leading).padding(4)
-                    } label: { sectionLabel("Dyson TP07", symbol: "fan", state: store.dysonState) }
-                }.padding()
-            }
-        }.frame(width: 360).frame(maxHeight: 620)
+                            Text("Dyson TP07").font(.headline)
+                            placeholder("Connect your Dyson TP07 to monitor and control the air purifier.", kind: .dyson)
+                        }
+                    } else { DysonCard(store: store) }
+                }.padding(20)
+                    .onGeometryChange(for: CGFloat.self) { ceil($0.size.height) } action: { contentHeight = $0 }
+            }.scrollBounceBehavior(.basedOnSize)
+        }.frame(width: 480, height: panelHeight, alignment: .top)
+            .onChange(of: panelHeight, initial: true) { _, height in heightChanged(height) }
+            .onChange(of: store.lights) { _, _ in dismissUnavailableLight() }
+            .onChange(of: store.hueState) { _, _ in dismissUnavailableLight() }
     }
-    private func sectionLabel(_ title: LocalizedStringKey, symbol: String, state: ConnectionState) -> some View {
-        HStack {
-            Label(title, systemImage: symbol)
-            Spacer()
-            Text(LocalizedStringKey(state.rawValue)).font(.caption).foregroundStyle(state == .online ? .green : .secondary)
+    private var header: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Image(systemName: "house.fill").font(.title2).accessibilityHidden(true)
+                Text("Home Control").font(.system(size: 19, weight: .semibold))
+                Spacer()
+                Button { openSettings(nil) } label: { Image(systemName: "gearshape").font(.title3) }
+                    .buttonStyle(.borderless).help("Settings…").accessibilityLabel("Settings")
+            }.padding(.horizontal, 24).padding(.vertical, 18)
+            Divider()
+        }.fixedSize(horizontal: false, vertical: true)
+    }
+    private var lightsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Lights").font(.headline)
+                Spacer()
+                if store.configuration.hue != nil {
+                    if store.hueState == .online {
+                        Text("\(store.lights.filter(\.isOn).count) on").font(.subheadline).foregroundStyle(.secondary)
+                    } else { ConnectionLabel(state: store.hueState) }
+                }
+            }
+            if store.configuration.hue == nil {
+                placeholder("Connect your Hue Bridge to control your lights.", kind: .hue)
+            } else if store.lights.isEmpty {
+                Text(store.hueState == .online ? "No lights found on this bridge." : "Waiting for your Hue Bridge…").foregroundStyle(.secondary)
+            } else {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                    ForEach(store.lights) { light in
+                        HueLightCard(store: store, light: light, presentation: presentation)
+                    }
+                }
+            }
+            if let error = store.hueError { ErrorNotice(message: error) }
+        }
+    }
+    private func dismissUnavailableLight() {
+        guard let selection = presentation.selectedLight else { return }
+        if store.hueState != .online || !store.lights.contains(where: { $0.id == selection.id && $0.reachable && $0.supportsBrightness }) {
+            presentation.selectedLight = nil
         }
     }
     private func placeholder(_ text: LocalizedStringKey, kind: DeviceKind) -> some View {
@@ -69,18 +82,8 @@ struct DevicePanel: View {
             Button("Connect") { openSettings(kind) }.buttonStyle(.borderedProminent)
         }
     }
-    private func sensor(_ title: LocalizedStringKey, symbol: String, reading: SensorReading?, unit: String, fraction: Int) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label(title, systemImage: symbol).font(.caption).foregroundStyle(.secondary)
-            if let value = reading?.value {
-                Text(value.formatted(.number.precision(.fractionLength(fraction))) + unit).font(.title2).monospacedDigit()
-                if store.dysonState != .online || reading?.isFresh(at: store.now) != true {
-                    Text("Last updated \(reading!.receivedAt.formatted(date: .omitted, time: .shortened))").font(.caption2).foregroundStyle(.secondary)
-                }
-            } else { Text("—").font(.title2).foregroundStyle(.secondary) }
-        }.frame(maxWidth: .infinity, alignment: .leading)
-    }
 }
+
 struct ErrorNotice: View {
     var message: String
     var body: some View {
@@ -91,53 +94,6 @@ struct ErrorNotice: View {
                     NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork")!)
                 }
             }
-        }
-    }
-}
-struct HueLightRow: View {
-    var light: HueLight
-    var enabled: Bool
-    var pending: Bool
-    var change: (Bool?, Double?) -> Void
-    @State private var draft: Double = 0
-    @State private var editing = false
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Toggle(isOn: Binding(get: { light.isOn }, set: { change($0, nil) })) {
-                    VStack(alignment: .leading) {
-                        Text(light.name)
-                        if !light.reachable { Text("Unavailable").font(.caption).foregroundStyle(.secondary) }
-                    }
-                }.toggleStyle(.switch)
-                if pending { ProgressView().controlSize(.small) }
-            }
-            if let brightness = light.brightness {
-                HStack {
-                    Slider(value: Binding(get: { editing ? draft : brightness }, set: { draft = $0 }), in: 1...100) { Text("Brightness") } onEditingChanged: { active in
-                        if active { draft = brightness; editing = true }
-                        else { editing = false; change(nil, draft) }
-                    }.accessibilityLabel(Text("Brightness for \(light.name)"))
-                    Text("\(Int(editing ? draft : brightness))%").font(.caption).monospacedDigit().frame(width: 35)
-                }
-            }
-        }.disabled(!enabled)
-    }
-}
-struct DysonSpeedControl: View {
-    var speed: Int?
-    var autoMode: Bool
-    var change: (Int) -> Void
-    @State private var draft = 1.0
-    @State private var editing = false
-    var body: some View {
-        HStack {
-            Text("Speed")
-            Slider(value: Binding(get: { editing ? draft : Double(speed ?? 1) }, set: { draft = $0 }), in: 1...10, step: 1) { Text("Fan speed") } onEditingChanged: { active in
-                if active { draft = Double(speed ?? 1); editing = true }
-                else { editing = false; change(Int(draft)) }
-            }
-            Text(autoMode && !editing ? "Auto" : String(Int(editing ? draft : Double(speed ?? 1)))).font(.caption).monospacedDigit().frame(width: 30)
         }
     }
 }

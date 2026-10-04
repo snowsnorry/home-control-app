@@ -1,6 +1,28 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "%lld on": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld on"
+          }
+        }
+      }
+    },
+    "%lld%%": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld%%"
+          }
+        }
+      }
+    },
     "Access was denied. Check your credentials or reconnect.": {
       "extractionState": "manual",
       "localizations": {
@@ -34,6 +56,28 @@
         }
       }
     },
+    "Activate %@ in %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Activate %@ in %@"
+          }
+        }
+      }
+    },
+    "Active": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Active"
+          }
+        }
+      }
+    },
     "Address": {
       "extractionState": "manual",
       "localizations": {
@@ -41,6 +85,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Address"
+          }
+        }
+      }
+    },
+    "Adjust brightness for %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Adjust brightness for %@"
+          }
+        }
+      }
+    },
+    "Air quality unavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Air quality unavailable"
           }
         }
       }
@@ -122,6 +188,17 @@
         }
       }
     },
+    "Brightness for %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Brightness for %@"
+          }
+        }
+      }
+    },
     "Cancel": {
       "extractionState": "manual",
       "localizations": {
@@ -133,6 +210,17 @@
         }
       }
     },
+    "Changing speed switches to Manual and turns the purifier on.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changing speed switches to Manual and turns the purifier on."
+          }
+        }
+      }
+    },
     "Choose Another Bridge": {
       "extractionState": "manual",
       "localizations": {
@@ -140,6 +228,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "Choose Another Bridge"
+          }
+        }
+      }
+    },
+    "Choose which Hue scenes appear in the device panel. Nothing is selected automatically.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose which Hue scenes appear in the device panel. Nothing is selected automatically."
           }
         }
       }
@@ -320,6 +419,50 @@
         }
       }
     },
+    "Dyson does not support this MQTT protocol version (code 1).": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dyson does not support this MQTT protocol version (code 1)."
+          }
+        }
+      }
+    },
+    "Dyson rejected the MQTT client identifier (code 2).": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dyson rejected the MQTT client identifier (code 2)."
+          }
+        }
+      }
+    },
+    "Dyson rejected the local device credentials. Run MyDyson setup again or check the manual MQTT credential. Your account password is not used for this connection.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dyson rejected the local device credentials. Run MyDyson setup again or check the manual MQTT credential. Your account password is not used for this connection."
+          }
+        }
+      }
+    },
+    "Dyson rejected the status subscription. Check the device topic prefix in setup.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dyson rejected the status subscription. Check the device topic prefix in setup."
+          }
+        }
+      }
+    },
     "Edit": {
       "extractionState": "manual",
       "localizations": {
@@ -364,6 +507,17 @@
         }
       }
     },
+    "Fair air quality": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fair air quality"
+          }
+        }
+      }
+    },
     "Fan speed": {
       "extractionState": "manual",
       "localizations": {
@@ -371,6 +525,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "Fan speed"
+          }
+        }
+      }
+    },
+    "Good air quality": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Good air quality"
           }
         }
       }
@@ -441,6 +606,17 @@
         }
       }
     },
+    "Humidity": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Humidity"
+          }
+        }
+      }
+    },
     "IP address or hostname": {
       "extractionState": "manual",
       "localizations": {
@@ -448,6 +624,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "IP address or hostname"
+          }
+        }
+      }
+    },
+    "Inactive": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inactive"
           }
         }
       }
@@ -474,6 +661,17 @@
         }
       }
     },
+    "Invalid scene identifier.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid scene identifier."
+          }
+        }
+      }
+    },
     "Keeps temperature and humidity monitoring active while the fan is in standby.": {
       "extractionState": "manual",
       "localizations": {
@@ -492,6 +690,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Keychain operation failed."
+          }
+        }
+      }
+    },
+    "Last updated %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Last updated %@"
+          }
+        }
+      }
+    },
+    "Lights": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lights"
           }
         }
       }
@@ -558,6 +778,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "Manual"
+          }
+        }
+      }
+    },
+    "Mode": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mode"
           }
         }
       }
@@ -650,6 +881,17 @@
         }
       }
     },
+    "No scenes found on this bridge.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No scenes found on this bridge."
+          }
+        }
+      }
+    },
     "Not connected": {
       "extractionState": "manual",
       "localizations": {
@@ -661,6 +903,17 @@
         }
       }
     },
+    "Off": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off"
+          }
+        }
+      }
+    },
     "Offline": {
       "extractionState": "manual",
       "localizations": {
@@ -668,6 +921,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Offline"
+          }
+        }
+      }
+    },
+    "On": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On"
+          }
+        }
+      }
+    },
+    "On · %lld%%": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On · %lld%%"
           }
         }
       }
@@ -694,6 +969,28 @@
         }
       }
     },
+    "Other scenes": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Other scenes"
+          }
+        }
+      }
+    },
+    "PM2.5": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PM2.5"
+          }
+        }
+      }
+    },
     "Paste": {
       "extractionState": "manual",
       "localizations": {
@@ -716,6 +1013,17 @@
         }
       }
     },
+    "Poor air quality": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Poor air quality"
+          }
+        }
+      }
+    },
     "Power": {
       "extractionState": "manual",
       "localizations": {
@@ -723,6 +1031,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "Power"
+          }
+        }
+      }
+    },
+    "Power for %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Power for %@"
           }
         }
       }
@@ -760,6 +1079,39 @@
         }
       }
     },
+    "Purifier mode": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Purifier mode"
+          }
+        }
+      }
+    },
+    "Purifier power": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Purifier power"
+          }
+        }
+      }
+    },
+    "Quick lighting moods": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quick lighting moods"
+          }
+        }
+      }
+    },
     "Quit": {
       "extractionState": "manual",
       "localizations": {
@@ -793,6 +1145,17 @@
         }
       }
     },
+    "Reconnect your Hue Bridge to update the available scenes.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reconnect your Hue Bridge to update the available scenes."
+          }
+        }
+      }
+    },
     "Remove Connection": {
       "extractionState": "manual",
       "localizations": {
@@ -800,6 +1163,39 @@
           "stringUnit": {
             "state": "translated",
             "value": "Remove Connection"
+          }
+        }
+      }
+    },
+    "Remove from panel": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove from panel"
+          }
+        }
+      }
+    },
+    "Removed scene": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Removed scene"
+          }
+        }
+      }
+    },
+    "Scenes": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scenes"
           }
         }
       }
@@ -914,6 +1310,17 @@
         }
       }
     },
+    "Show %@ in %@ in the panel": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show %@ in %@ in the panel"
+          }
+        }
+      }
+    },
     "Sign In": {
       "extractionState": "manual",
       "localizations": {
@@ -943,6 +1350,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "TP07 uses a 438 topic prefix, sometimes with E, K or M. Use the value from your device credentials."
+          }
+        }
+      }
+    },
+    "Temperature": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Temperature"
+          }
+        }
+      }
+    },
+    "The Dyson MQTT service refused the connection. Try again later.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The Dyson MQTT service refused the connection. Try again later."
           }
         }
       }
@@ -991,6 +1420,28 @@
         }
       }
     },
+    "Turn purifier off": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turn purifier off"
+          }
+        }
+      }
+    },
+    "Turn purifier on": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turn purifier on"
+          }
+        }
+      }
+    },
     "Unavailable": {
       "extractionState": "manual",
       "localizations": {
@@ -998,6 +1449,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "Unavailable"
+          }
+        }
+      }
+    },
+    "Unavailable scenes": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unavailable scenes"
           }
         }
       }
@@ -1020,6 +1482,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "Verification code from email"
+          }
+        }
+      }
+    },
+    "Very poor air quality": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Very poor air quality"
           }
         }
       }
@@ -1064,61 +1537,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "—"
-          }
-        }
-      }
-    },
-    "Dyson rejected the local device credentials. Run MyDyson setup again or check the manual MQTT credential. Your account password is not used for this connection.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dyson rejected the local device credentials. Run MyDyson setup again or check the manual MQTT credential. Your account password is not used for this connection."
-          }
-        }
-      }
-    },
-    "Dyson rejected the MQTT client identifier (code 2).": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dyson rejected the MQTT client identifier (code 2)."
-          }
-        }
-      }
-    },
-    "Dyson does not support this MQTT protocol version (code 1).": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dyson does not support this MQTT protocol version (code 1)."
-          }
-        }
-      }
-    },
-    "The Dyson MQTT service refused the connection. Try again later.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The Dyson MQTT service refused the connection. Try again later."
-          }
-        }
-      }
-    },
-    "Dyson rejected the status subscription. Check the device topic prefix in setup.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dyson rejected the status subscription. Check the device topic prefix in setup."
           }
         }
       }

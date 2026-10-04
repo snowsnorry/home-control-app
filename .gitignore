@@ -3,6 +3,7 @@
 .swiftpm/
 build/
 dist/
+/output/
 DerivedData/
 *.app/
 *.dSYM/

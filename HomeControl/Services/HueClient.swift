@@ -70,9 +70,11 @@ final class HueTrustDelegate: NSObject, URLSessionDelegate, URLSessionTaskDelega
 }
 
 @MainActor final class HueClient: HueClientProtocol {
+    private let sessionConfiguration: URLSessionConfiguration?
+    init(sessionConfiguration: URLSessionConfiguration? = nil) { self.sessionConfiguration = sessionConfiguration }
     private func session(_ configuration: HueConfiguration?) throws -> (URLSession, HueTrustDelegate) {
         let delegate = try HueTrustDelegate(bridgeID: configuration?.bridgeID)
-        let config = URLSessionConfiguration.ephemeral
+        let config = sessionConfiguration ?? URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 10
         config.timeoutIntervalForResource = 86400
         return (URLSession(configuration: config, delegate: delegate, delegateQueue: nil), delegate)
@@ -116,32 +118,66 @@ final class HueTrustDelegate: NSObject, URLSessionDelegate, URLSessionTaskDelega
         guard let success = first["success"] as? [String: Any], let key = success["username"] as? String else { throw ControlError.authorization }
         return key
     }
-    static func parseResources(_ data: Data) throws -> [HueLight] {
-        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw ControlError.message(String(localized: "Malformed Hue response.")) }
-        if let errors = object["errors"] as? [[String: Any]], !errors.isEmpty {
-            throw ControlError.message(String(localized: "Hue could not complete the request."))
+    private static func resources(_ data: Data) throws -> [[String: Any]] {
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let errors = object["errors"] as? [[String: Any]],
+              let resources = object["data"] as? [[String: Any]] else {
+            throw ControlError.message(String(localized: "Malformed Hue response."))
         }
-        guard let resources = object["data"] as? [[String: Any]] else { throw ControlError.message(String(localized: "Malformed Hue response.")) }
-        let names = Dictionary(resources.compactMap { resource -> (String, String)? in
-            guard resource["type"] as? String == "device", let id = resource["id"] as? String,
-                  let meta = resource["metadata"] as? [String: Any], let name = meta["name"] as? String else { return nil }
-            return (id, name)
+        guard errors.isEmpty else { throw ControlError.message(String(localized: "Hue could not complete the request.")) }
+        return resources
+    }
+    static func parseResources(_ data: Data) throws -> [HueLight] { try parseSnapshot(data).lights }
+    static func parseSnapshot(_ data: Data) throws -> HueBridgeSnapshot {
+        let resources = try resources(data)
+        let byID = Dictionary(resources.compactMap { r -> (String, [String: Any])? in
+            guard let id = r["id"] as? String else { return nil }; return (id, r)
         }, uniquingKeysWith: { first, _ in first })
         var connectivity: [String: Bool] = [:]
         for r in resources where r["type"] as? String == "zigbee_connectivity" {
-            if let owner = r["owner"] as? [String: Any], let id = owner["rid"] as? String { connectivity[id] = r["status"] as? String == "connected" }
+            if let id = (r["owner"] as? [String: Any])?["rid"] as? String { connectivity[id] = r["status"] as? String == "connected" }
         }
-        return resources.compactMap { r in
+        let lights = resources.compactMap { r -> HueLight? in
             guard r["type"] as? String == "light", let id = r["id"] as? String else { return nil }
             let owner = (r["owner"] as? [String: Any])?["rid"] as? String ?? ""
-            let name = (r["metadata"] as? [String: Any])?["name"] as? String ?? names[owner] ?? "Hue light"
+            let device = byID[owner] ?? [:]
+            let metadata = device["metadata"] as? [String: Any] ?? [:]
+            let product = device["product_data"] as? [String: Any] ?? [:]
+            let name = (r["metadata"] as? [String: Any])?["name"] as? String ?? metadata["name"] as? String ?? String(localized: "Hue light")
+            let preferredArchetype = metadata["archetype"] as? String
+            let archetype = preferredArchetype.flatMap { $0 == "unknown_archetype" ? nil : $0 } ?? product["product_archetype"] as? String ?? "unknown_archetype"
             return HueLight(id: id, name: name, isOn: (r["on"] as? [String: Any])?["on"] as? Bool ?? false,
-                            brightness: (r["dimming"] as? [String: Any])?["brightness"] as? Double, reachable: connectivity[owner] ?? true)
+                            brightness: (r["dimming"] as? [String: Any])?["brightness"] as? Double,
+                            reachable: connectivity[owner] ?? true, archetype: archetype)
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        let scenes = resources.compactMap { r -> HueScene? in
+            guard r["type"] as? String == "scene", let id = r["id"] as? String,
+                  let name = (r["metadata"] as? [String: Any])?["name"] as? String,
+                  let groupID = (r["group"] as? [String: Any])?["rid"] as? String else { return nil }
+            let groupName = (byID[groupID]?["metadata"] as? [String: Any])?["name"] as? String ?? String(localized: "Other scenes")
+            return HueScene(id: id, name: name, groupID: groupID, groupName: groupName,
+                            active: (r["status"] as? [String: Any])?["active"] as? String)
+        }.sorted {
+            let groupOrder = $0.groupName.localizedStandardCompare($1.groupName)
+            if groupOrder != .orderedSame { return groupOrder == .orderedAscending }
+            let nameOrder = $0.name.localizedStandardCompare($1.name)
+            return nameOrder == .orderedSame ? $0.id < $1.id : nameOrder == .orderedAscending
+        }
+        return HueBridgeSnapshot(lights: lights, scenes: scenes)
     }
-    func fetchLights(configuration: HueConfiguration, key: String) async throws -> [HueLight] {
+    func fetchSnapshot(configuration: HueConfiguration, key: String) async throws -> HueBridgeSnapshot {
         let (session, _) = try session(configuration); defer { session.invalidateAndCancel() }
-        return try Self.parseResources(await data(request(host: configuration.host, path: "/clip/v2/resource", key: key), session: session))
+        return try Self.parseSnapshot(await data(request(host: configuration.host, path: "/clip/v2/resource", key: key), session: session))
+    }
+    static func sceneRecallBody(id: String) throws -> [String: Any] {
+        guard UUID(uuidString: id) != nil else { throw ControlError.message(String(localized: "Invalid scene identifier.")) }
+        return ["recall": ["action": "active"]]
+    }
+    func recallScene(configuration: HueConfiguration, key: String, id: String) async throws {
+        let body = try Self.sceneRecallBody(id: id)
+        let (session, _) = try session(configuration); defer { session.invalidateAndCancel() }
+        let result = try await data(request(host: configuration.host, path: "/clip/v2/resource/scene/" + id, key: key, method: "PUT", body: body), session: session)
+        _ = try Self.resources(result)
     }
     func setLight(configuration: HueConfiguration, key: String, id: String, on: Bool?, brightness: Double?) async throws {
         guard UUID(uuidString: id) != nil else { throw ControlError.message(String(localized: "Invalid light identifier.")) }

@@ -3,7 +3,8 @@ import Foundation
 @MainActor protocol HueClientProtocol: AnyObject {
     func identify(host: String, bridgeID: String?) async throws -> HueConfiguration
     func pair(configuration: HueConfiguration) async throws -> String
-    func fetchLights(configuration: HueConfiguration, key: String) async throws -> [HueLight]
+    func fetchSnapshot(configuration: HueConfiguration, key: String) async throws -> HueBridgeSnapshot
+    func recallScene(configuration: HueConfiguration, key: String, id: String) async throws
     func setLight(configuration: HueConfiguration, key: String, id: String, on: Bool?, brightness: Double?) async throws
     func watch(configuration: HueConfiguration, key: String, changed: @escaping @MainActor () async -> Void) async throws
 }

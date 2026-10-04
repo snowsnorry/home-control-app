@@ -61,6 +61,7 @@ struct SettingsView: View {
             Button("Connect") { wizard.begin(wizard.selected) }.buttonStyle(.borderedProminent)
         }
         if let error = wizard.selected == .hue ? store.hueError : store.dysonError { ErrorNotice(message: error) }
+        if wizard.selected == .hue, store.configuration.hue != nil { HueSceneSettings(store: store) }
         Divider()
         Text("Device integrations have not yet been verified with your physical devices.").font(.caption).foregroundStyle(.secondary)
     }

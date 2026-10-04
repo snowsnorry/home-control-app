@@ -1,4 +1,5 @@
 import XCTest
+import AppKit
 import Security
 @preconcurrency import CocoaMQTT
 @testable import HomeControl
@@ -111,10 +112,27 @@ final class CodecTests: XCTestCase {
     var lights: [HueLight] = []
     var commands = 0
     var rejectPair = false
+    var confirmLights = false
+    var delayRecall = false
+    var rejectRecall = false
+    private var recallContinuation: CheckedContinuation<Void, Never>?
+    func finishRecall() { recallContinuation?.resume(); recallContinuation = nil }
     func identify(host: String, bridgeID: String?) async throws -> HueConfiguration { HueConfiguration(host: host, bridgeID: bridgeID ?? "001788fffe123456") }
     func pair(configuration: HueConfiguration) async throws -> String { if rejectPair { throw ControlError.authorization }; return "hue-key" }
-    func fetchLights(configuration: HueConfiguration, key: String) async throws -> [HueLight] { lights }
-    func setLight(configuration: HueConfiguration, key: String, id: String, on: Bool?, brightness: Double?) async throws { commands += 1 }
+    var scenes: [HueScene] = []
+    func fetchSnapshot(configuration: HueConfiguration, key: String) async throws -> HueBridgeSnapshot { HueBridgeSnapshot(lights: lights, scenes: scenes) }
+    func recallScene(configuration: HueConfiguration, key: String, id: String) async throws {
+        commands += 1
+        if rejectRecall { throw ControlError.message("Scene recall failed") }
+        if delayRecall { await withCheckedContinuation { recallContinuation = $0 } }
+        if let index = scenes.firstIndex(where: { $0.id == id }) { scenes[index].active = "static" }
+    }
+    func setLight(configuration: HueConfiguration, key: String, id: String, on: Bool?, brightness: Double?) async throws {
+        commands += 1
+        if confirmLights, let index = lights.firstIndex(where: { $0.id == id }) {
+            if let on { lights[index].isOn = on }; if let brightness { lights[index].brightness = brightness }
+        }
+    }
     func watch(configuration: HueConfiguration, key: String, changed: @escaping @MainActor () async -> Void) async throws { try await Task.sleep(for: .seconds(1000)) }
 }
 @MainActor final class FakeDyson: DysonClientProtocol {
@@ -342,5 +360,210 @@ final class HueTrustTests: XCTestCase {
         }
         wait(for: [handled], timeout: 1)
         XCTAssertNil(delegate.certificateID)
+    }
+}
+
+final class AirQualityTests: XCTestCase {
+    let now = Date(timeIntervalSince1970: 1000)
+    func testEveryBoundary() {
+        for (keyPath, boundaries) in [(\DysonSnapshot.pm25, [36.0, 54, 71]), (\DysonSnapshot.pm10, [51.0, 76, 101]),
+                                       (\DysonSnapshot.voc, [4.0, 7, 9]), (\DysonSnapshot.nitrogenDioxide, [4.0, 7, 9])] {
+            var snapshot = DysonSnapshot()
+            snapshot[keyPath: keyPath] = SensorReading(value: 0, receivedAt: now)
+            XCTAssertEqual(snapshot.airQuality(at: now, connected: true), .good)
+            for (index, boundary) in boundaries.enumerated() {
+                snapshot[keyPath: keyPath] = SensorReading(value: boundary - 0.01, receivedAt: now)
+                XCTAssertEqual(snapshot.airQuality(at: now, connected: true)?.rawValue, index)
+                snapshot[keyPath: keyPath] = SensorReading(value: boundary, receivedAt: now)
+                XCTAssertEqual(snapshot.airQuality(at: now, connected: true)?.rawValue, index + 1)
+            }
+        }
+    }
+    func testWorstFreshReadingAndOfflineNeutral() {
+        var snapshot = DysonSnapshot()
+        snapshot.pm25 = SensorReading(value: 2, receivedAt: now)
+        snapshot.voc = SensorReading(value: 8, receivedAt: now)
+        snapshot.pm10 = SensorReading(value: 500, receivedAt: now.addingTimeInterval(-120))
+        XCTAssertEqual(snapshot.airQuality(at: now, connected: true), .poor)
+        XCTAssertNil(snapshot.airQuality(at: now, connected: false))
+        XCTAssertNil(snapshot.airQuality(at: now.addingTimeInterval(120), connected: true))
+    }
+    func testMissingAndInvalidMeasurementsAreNotGoodAir() {
+        var snapshot = DysonSnapshot()
+        XCTAssertNil(snapshot.airQuality(at: now, connected: true))
+        for value in [-1.0, Double.nan, Double.infinity] {
+            snapshot.pm25 = SensorReading(value: value, receivedAt: now)
+            XCTAssertNil(snapshot.airQuality(at: now, connected: true))
+        }
+    }
+    func testHighResolutionZeroAndGasIndices() throws {
+        let data = Data(#"{"msg":"ENVIRONMENTAL-CURRENT-SENSOR-DATA","data":{"p25r":"0000","pm25":"0050","p10r":"0010","pm10":"9999","va10":"0075","noxl":"0090"}}"#.utf8)
+        let snapshot = try DysonCodec.updated(DysonSnapshot(), payload: data, now: now)
+        XCTAssertEqual(snapshot.pm25?.value, 0)
+        XCTAssertEqual(snapshot.pm10?.value, 10)
+        XCTAssertEqual(snapshot.voc?.value, 7.5)
+        XCTAssertEqual(snapshot.nitrogenDioxide?.value, 9)
+        XCTAssertEqual(snapshot.airQuality(at: now, connected: true), .veryPoor)
+    }
+    func testFallbacksSentinelsAndPartialUpdates() throws {
+        var snapshot = try DysonCodec.updated(DysonSnapshot(), payload: Data(#"{"msg":"ENVIRONMENTAL-CURRENT-SENSOR-DATA","data":{"p25r":"FAIL","pm25":"0042","pm10":"0012","va10":"0010"}}"#.utf8), now: now)
+        XCTAssertEqual(snapshot.pm25?.value, 42); XCTAssertEqual(snapshot.pm10?.value, 12)
+        snapshot = try DysonCodec.updated(snapshot, payload: Data(#"{"msg":"ENVIRONMENTAL-CURRENT-SENSOR-DATA","data":{"va10":"OFF","noxl":"-10"}}"#.utf8), now: now.addingTimeInterval(10))
+        XCTAssertEqual(snapshot.pm25?.value, 42); XCTAssertEqual(snapshot.pm25?.receivedAt, now)
+        XCTAssertNil(snapshot.voc?.value); XCTAssertNil(snapshot.nitrogenDioxide?.value)
+    }
+    func testPollutantSentinelsAndNonfiniteValues() throws {
+        for value in ["OFF", "INIT", "FAIL", "NONE", "NaN", "inf", "-1", "10000"] {
+            let data = Data("{\"msg\":\"ENVIRONMENTAL-CURRENT-SENSOR-DATA\",\"data\":{\"p25r\":\"\(value)\",\"p10r\":\"\(value)\",\"va10\":\"\(value)\",\"noxl\":\"\(value)\"}}".utf8)
+            let snapshot = try DysonCodec.updated(DysonSnapshot(), payload: data, now: now)
+            XCTAssertNil(snapshot.pm25?.value); XCTAssertNil(snapshot.pm10?.value)
+            XCTAssertNil(snapshot.voc?.value); XCTAssertNil(snapshot.nitrogenDioxide?.value)
+            XCTAssertNil(snapshot.airQuality(at: now, connected: true))
+        }
+    }
+}
+
+@MainActor final class SceneTests: XCTestCase {
+    let sceneID = "BA109016-1CD5-45D0-8395-1797FCAD3AAB"
+    func testSnapshotIncludesGroupsActivityAndDeviceArchetypes() throws {
+        let data = Data(#"{"errors":[],"data":[{"id":"room","type":"room","metadata":{"name":"Office"}},{"id":"device","type":"device","metadata":{"name":"Desk","archetype":"table_shade"}},{"id":"plugdevice","type":"device","metadata":{"archetype":"unknown_archetype"},"product_data":{"product_archetype":"plug"}},{"id":"lamp","type":"light","owner":{"rid":"device"},"dimming":{"brightness":42}},{"id":"plug","type":"light","owner":{"rid":"plugdevice"}},{"id":"scene","type":"scene","metadata":{"name":"Focus"},"group":{"rid":"room"},"status":{"active":"static"}},{"id":"ignored","type":"smart_scene","metadata":{"name":"Schedule"}}]}"#.utf8)
+        let snapshot = try HueClient.parseSnapshot(data)
+        XCTAssertEqual(snapshot.lights.first(where: { $0.id == "lamp" })?.archetype, "table_shade")
+        XCTAssertEqual(snapshot.lights.first(where: { $0.id == "plug" })?.archetype, "plug")
+        XCTAssertFalse(snapshot.lights.first(where: { $0.id == "plug" })!.supportsBrightness)
+        XCTAssertEqual(snapshot.scenes.count, 1)
+        XCTAssertEqual(snapshot.scenes[0].groupName, "Office"); XCTAssertTrue(snapshot.scenes[0].isActive)
+    }
+    func testRecallBodyAndInvalidID() throws {
+        let body = try HueClient.sceneRecallBody(id: sceneID)
+        XCTAssertEqual((body["recall"] as? [String: String])?["action"], "active")
+        XCTAssertThrowsError(try HueClient.sceneRecallBody(id: "scene/path"))
+    }
+    func testRecallRequestAndHueFailure() async throws {
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [StubURLProtocol.self]
+        let client = HueClient(sessionConfiguration: config)
+        let expectedPath = "/clip/v2/resource/scene/" + sceneID
+        StubURLProtocol.install { request in
+            XCTAssertEqual(request.httpMethod, "PUT")
+            XCTAssertEqual(request.url?.path, expectedPath)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "hue-application-key"), "test-key")
+            var bytes = request.httpBody ?? Data()
+            if bytes.isEmpty, let stream = request.httpBodyStream {
+                stream.open(); defer { stream.close() }
+                var buffer = [UInt8](repeating: 0, count: 1024)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }; bytes.append(contentsOf: buffer.prefix(count))
+                }
+            }
+            let body = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any] ?? [:]
+            XCTAssertEqual((body["recall"] as? [String: String])?["action"], "active")
+            return (200, Data(#"{"errors":[],"data":[]}"#.utf8))
+        }
+        try await client.recallScene(configuration: HueConfiguration(host: "hue.local", bridgeID: "001788fffe123456"), key: "test-key", id: sceneID)
+        StubURLProtocol.install { _ in (200, Data(#"{"errors":[{"description":"failed"}],"data":[]}"#.utf8)) }
+        do {
+            try await client.recallScene(configuration: HueConfiguration(host: "hue.local", bridgeID: "001788fffe123456"), key: "test-key", id: sceneID)
+            XCTFail("Hue errors must fail recall")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("Hue")) }
+    }
+    func testOldConfigurationAndSelectionPersistence() throws {
+        let old = try JSONDecoder().decode(SavedConfiguration.self, from: Data(#"{"hue":{"host":"hue.local","bridgeID":"bridge"}}"#.utf8))
+        XCTAssertNil(old.hue?.selectedSceneIDs)
+        let persistence = MemoryConfiguration(); persistence.saved = old
+        let store = HomeStore(hue: FakeHue(), dyson: FakeDyson(), secrets: MemorySecrets(), persistence: persistence, clock: FakeClock())
+        XCTAssertTrue(store.visibleScenes.isEmpty)
+        store.setSceneVisible(sceneID, visible: true)
+        XCTAssertEqual(persistence.saved.hue?.selectedSceneIDs, [sceneID])
+        let restored = try JSONDecoder().decode(SavedConfiguration.self, from: JSONEncoder().encode(persistence.saved))
+        XCTAssertEqual(restored.hue?.selectedSceneIDs, [sceneID])
+        persistence.fail = true
+        store.setSceneVisible(sceneID, visible: false)
+        XCTAssertEqual(store.configuration.hue?.selectedSceneIDs, [sceneID]); XCTAssertNotNil(store.storageError)
+    }
+    func testSameBridgePreservesSelectionAndNewBridgeResetsIt() async throws {
+        let persistence = MemoryConfiguration(); persistence.saved.hue = HueConfiguration(host: "hue.local", bridgeID: "first", selectedSceneIDs: [sceneID])
+        let store = HomeStore(hue: FakeHue(), dyson: FakeDyson(), secrets: MemorySecrets(), persistence: persistence, clock: FakeClock())
+        try await store.connectHue(HueConfiguration(host: "new-address.local", bridgeID: "first"))
+        XCTAssertEqual(store.configuration.hue?.selectedSceneIDs, [sceneID])
+        try await store.connectHue(HueConfiguration(host: "other.local", bridgeID: "second"))
+        XCTAssertTrue((store.configuration.hue?.selectedSceneIDs ?? []).isEmpty)
+        store.stop()
+    }
+    func testBrightnessTurnsOnAndPlugRejectsBrightness() async throws {
+        let hue = FakeHue(); hue.confirmLights = true
+        hue.lights = [HueLight(id: "lamp", name: "Lamp", isOn: false, brightness: 20, reachable: true), HueLight(id: "plug", name: "Plug", isOn: false, brightness: nil, reachable: true)]
+        let store = HomeStore(hue: hue, dyson: FakeDyson(), secrets: MemorySecrets(), persistence: MemoryConfiguration(), clock: FakeClock())
+        try await store.connectHue(HueConfiguration(host: "hue.local", bridgeID: "bridge"))
+        for _ in 0..<20 { await Task.yield() }
+        store.setLight(store.lights[1], brightness: 50)
+        XCTAssertEqual(hue.commands, 0)
+        store.setLight(store.lights[0], brightness: 50)
+        for _ in 0..<40 { await Task.yield() }
+        XCTAssertEqual(hue.commands, 1); XCTAssertTrue(store.lights[0].isOn)
+        XCTAssertEqual(store.lights[0].brightness, 50); XCTAssertTrue(store.pendingLights.isEmpty)
+        store.stop()
+    }
+    func testScenePendingBlocksLightCommandsAndRefreshesActivity() async throws {
+        let hue = FakeHue(); hue.delayRecall = true
+        let scene = HueScene(id: sceneID, name: "Focus", groupID: "room", groupName: "Office", active: "inactive")
+        hue.scenes = [scene]; hue.lights = [HueLight(id: "lamp", name: "Lamp", isOn: false, brightness: 20, reachable: true)]
+        let store = HomeStore(hue: hue, dyson: FakeDyson(), secrets: MemorySecrets(), persistence: MemoryConfiguration(), clock: FakeClock())
+        try await store.connectHue(HueConfiguration(host: "hue.local", bridgeID: "bridge"))
+        for _ in 0..<20 { await Task.yield() }
+        store.recallScene(scene); XCTAssertNil(store.pendingSceneID)
+        store.setSceneVisible(sceneID, visible: true)
+        store.recallScene(scene); XCTAssertEqual(store.pendingSceneID, sceneID)
+        store.setLight(store.lights[0], on: true)
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(hue.commands, 1)
+        hue.finishRecall()
+        for _ in 0..<40 { await Task.yield() }
+        XCTAssertNil(store.pendingSceneID); XCTAssertTrue(store.visibleScenes[0].isActive)
+        hue.scenes = []
+        store.reconnect(.hue)
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertTrue(store.visibleScenes.isEmpty)
+        XCTAssertEqual(store.configuration.hue?.selectedSceneIDs, [sceneID])
+        store.stop()
+    }
+    func testOldRecallCannotOverwriteReconnectedBridge() async throws {
+        let hue = FakeHue(); hue.delayRecall = true
+        let scene = HueScene(id: sceneID, name: "Focus", groupID: "room", groupName: "Office", active: nil)
+        hue.scenes = [scene]
+        let store = HomeStore(hue: hue, dyson: FakeDyson(), secrets: MemorySecrets(), persistence: MemoryConfiguration(), clock: FakeClock())
+        try await store.connectHue(HueConfiguration(host: "hue.local", bridgeID: "bridge"))
+        for _ in 0..<20 { await Task.yield() }
+        store.setSceneVisible(sceneID, visible: true); store.recallScene(scene)
+        for _ in 0..<20 { await Task.yield() }
+        store.reconnect(.hue)
+        hue.scenes = []; hue.finishRecall()
+        for _ in 0..<60 { await Task.yield() }
+        XCTAssertNil(store.pendingSceneID); XCTAssertTrue(store.scenes.isEmpty); XCTAssertNil(store.hueError)
+        store.stop()
+    }
+    func testSceneErrorClearsPendingWithoutChangingActivity() async throws {
+        let hue = FakeHue(); hue.rejectRecall = true
+        let scene = HueScene(id: sceneID, name: "Focus", groupID: "room", groupName: "Office", active: "inactive")
+        hue.scenes = [scene]
+        let store = HomeStore(hue: hue, dyson: FakeDyson(), secrets: MemorySecrets(), persistence: MemoryConfiguration(), clock: FakeClock())
+        try await store.connectHue(HueConfiguration(host: "hue.local", bridgeID: "bridge"))
+        for _ in 0..<20 { await Task.yield() }
+        store.setSceneVisible(sceneID, visible: true); store.recallScene(scene)
+        for _ in 0..<40 { await Task.yield() }
+        XCTAssertNil(store.pendingSceneID); XCTAssertEqual(store.hueError, "Scene recall failed")
+        XCTAssertFalse(store.visibleScenes[0].isActive)
+        store.stop()
+    }
+    func testEscapeSelectionAndIcons() {
+        let presentation = PanelPresentation()
+        XCTAssertFalse(presentation.closeBrightness())
+        presentation.selectedLight = .init(id: "lamp")
+        XCTAssertTrue(presentation.closeBrightness()); XCTAssertNil(presentation.selectedLight)
+        for archetype in ["table_shade", "floor_shade", "ceiling_round", "hue_lightstrip", "plug", "spot_bulb", "unknown"] {
+            for on in [true, false] {
+                XCTAssertNotNil(NSImage(systemSymbolName: HueIcon.symbol(archetype: archetype, on: on), accessibilityDescription: nil), archetype)
+            }
+        }
     }
 }

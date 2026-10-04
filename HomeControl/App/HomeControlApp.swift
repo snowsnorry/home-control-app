@@ -13,9 +13,18 @@ import Network
     }
 }
 
-@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
-    private let store = HomeStore()
+@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPopoverDelegate {
+    private let store: HomeStore
+    override init() {
+        #if DEBUG
+        store = CommandLine.arguments.contains("--preview-panel") ? PanelPreview.makeStore(arguments: CommandLine.arguments) : HomeStore()
+        #else
+        store = HomeStore()
+        #endif
+        super.init()
+    }
     private let wizard = ConnectionWizard()
+    private let presentation = PanelPresentation()
     private var statusItem: NSStatusItem?
     private let popover = NSPopover()
     private var settingsWindow: NSWindow?
@@ -35,8 +44,9 @@ import Network
             button.toolTip = String(localized: "Home Control")
         }
         popover.behavior = .transient
-        popover.contentSize = NSSize(width: 360, height: 440)
-        popover.contentViewController = NSHostingController(rootView: DevicePanel(store: store) { [weak self] in self?.showSettings($0) })
+        popover.delegate = self
+        popover.contentSize = NSSize(width: 480, height: 464)
+        popover.contentViewController = NSHostingController(rootView: makeDevicePanel())
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.store.reconnect(.hue); self?.store.reconnect(.dyson) }
         }
@@ -52,11 +62,23 @@ import Network
             }
         }
         escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if event.keyCode == 53, self?.popover.isShown == true { self?.popover.performClose(nil); return nil }
+            if event.keyCode == 53, self?.popover.isShown == true {
+                if self?.presentation.closeBrightness() != true { self?.popover.performClose(nil) }
+                return nil
+            }
             return event
         }
         installApplicationMenu()
         #if DEBUG
+        if let theme = CommandLine.arguments.first(where: { $0.hasPrefix("--preview-theme=") }), CommandLine.arguments.contains("--preview-panel") {
+            NSApp.appearance = NSAppearance(named: theme.hasSuffix("dark") ? .darkAqua : .aqua)
+        }
+        if CommandLine.arguments.contains("--preview-panel") {
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(200))
+                if let button = self.statusItem?.button { self.statusClicked(button) }
+            }
+        }
         if CommandLine.arguments.contains("--show-settings") { showSettings(nil) }
         #endif
     }
@@ -87,11 +109,23 @@ import Network
             menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height), in: sender)
         } else if popover.isShown { popover.performClose(nil) }
         else {
+            let height = min(700, max(240, (sender.window?.screen?.visibleFrame.height ?? 740) - 40))
+            popover.contentSize = NSSize(width: 480, height: min(popover.contentSize.height, height))
+            if let controller = popover.contentViewController as? NSHostingController<DevicePanel> {
+                controller.rootView = makeDevicePanel(maximumHeight: height)
+            }
             NSApp.activate()
             popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
         }
     }
+    private func makeDevicePanel(maximumHeight: CGFloat = 700) -> DevicePanel {
+        DevicePanel(store: store, presentation: presentation, maximumHeight: maximumHeight, heightChanged: { [weak self] height in
+            guard let self, abs(self.popover.contentSize.height - height) > 0.5 else { return }
+            self.popover.contentSize = NSSize(width: 480, height: height)
+        }, openSettings: { [weak self] in self?.showSettings($0) })
+    }
+    func popoverDidClose(_ notification: Notification) { presentation.selectedLight = nil }
     @objc private func openSettings() { showSettings(nil) }
     private func showSettings(_ kind: DeviceKind?) {
         popover.performClose(nil)

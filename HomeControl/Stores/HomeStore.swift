@@ -6,6 +6,8 @@ import Observation
     private(set) var hueState: ConnectionState = .notConnected
     private(set) var dysonState: ConnectionState = .notConnected
     private(set) var lights: [HueLight] = []
+    private(set) var scenes: [HueScene] = []
+    private(set) var pendingSceneID: String?
     private(set) var dyson = DysonSnapshot()
     private(set) var now: Date
     var hueError: String?
@@ -22,6 +24,7 @@ import Observation
     @ObservationIgnored private var dysonTask: Task<Void, Never>?
     @ObservationIgnored private var timer: Task<Void, Never>?
     @ObservationIgnored private var commandTasks: [UUID: Task<Void, Never>] = [:]
+    @ObservationIgnored private var hueCommandIDs: Set<UUID> = []
     @ObservationIgnored private var hueGeneration = UUID()
     @ObservationIgnored private var dysonGeneration = UUID()
     @ObservationIgnored private var started = false
@@ -36,12 +39,40 @@ import Observation
             var merged = snapshot
             if merged.temperature == nil { merged.temperature = self.dyson.temperature }
             if merged.humidity == nil { merged.humidity = self.dyson.humidity }
+            if merged.pm25 == nil { merged.pm25 = self.dyson.pm25 }
+            if merged.pm10 == nil { merged.pm10 = self.dyson.pm10 }
+            if merged.voc == nil { merged.voc = self.dyson.voc }
+            if merged.nitrogenDioxide == nil { merged.nitrogenDioxide = self.dyson.nitrogenDioxide }
             self.dyson = merged
         }
         dyson.onConnection = { [weak self] state, error in
             self?.dysonState = state
             if let error { self?.dysonError = error }
         }
+    }
+    var visibleScenes: [HueScene] {
+        let selected = Set(configuration.hue?.selectedSceneIDs ?? [])
+        return scenes.filter { selected.contains($0.id) }
+    }
+    func setSceneVisible(_ id: String, visible: Bool) {
+        guard var config = configuration.hue else { return }
+        var selected = Set(config.selectedSceneIDs ?? [])
+        if visible { selected.insert(id) } else { selected.remove(id) }
+        config.selectedSceneIDs = selected.sorted()
+        var updated = configuration; updated.hue = config
+        do { try persistence.save(updated); configuration = updated; storageError = nil }
+        catch { storageError = error.localizedDescription }
+    }
+    private func applyHue(_ snapshot: HueBridgeSnapshot) { lights = snapshot.lights; scenes = snapshot.scenes }
+    private func refreshHue(_ config: HueConfiguration, key: String, generation: UUID) async throws {
+        let snapshot = try await hue.fetchSnapshot(configuration: config, key: key)
+        try Task.checkCancellation()
+        guard hueGeneration == generation else { throw CancellationError() }
+        applyHue(snapshot)
+    }
+    private func cancelHueCommands() {
+        for id in hueCommandIDs { commandTasks[id]?.cancel(); commandTasks[id] = nil }
+        hueCommandIDs = []; pendingLights = []; pendingSceneID = nil
     }
     var badge: String? {
         guard dysonState == .online, let reading = dyson.temperature, reading.isFresh(at: now), let value = reading.value else { return nil }
@@ -66,11 +97,11 @@ import Observation
     }
     private func cancelCommands() {
         commandTasks.values.forEach { $0.cancel() }; commandTasks = [:]
-        pendingLights = []; dysonPending = false
+        pendingLights = []; pendingSceneID = nil; hueCommandIDs = []; dysonPending = false
     }
     func reconnect(_ kind: DeviceKind) {
         if kind == .hue {
-            hueTask?.cancel(); hueGeneration = UUID()
+            hueTask?.cancel(); hueGeneration = UUID(); cancelHueCommands()
             guard let config = configuration.hue else { hueState = .notConnected; return }
             let generation = hueGeneration
             hueTask = Task { [weak self] in
@@ -80,13 +111,13 @@ import Observation
                     self.hueState = .connecting
                     do {
                         guard let key = try self.secrets.read("hue"), !key.isEmpty else { throw ControlError.authorization }
-                        self.lights = try await self.hue.fetchLights(configuration: config, key: key)
+                        try await self.refreshHue(config, key: key, generation: generation)
                         try Task.checkCancellation()
                         self.hueState = .online; self.hueError = nil; delay = 1
                         try await self.hue.watch(configuration: config, key: key) { [weak self] in
                             guard let self, self.hueGeneration == generation else { return }
-                            do { self.lights = try await self.hue.fetchLights(configuration: config, key: key) }
-                            catch { self.hueError = error.localizedDescription }
+                            do { try await self.refreshHue(config, key: key, generation: generation) }
+                            catch { if self.hueGeneration == generation, !Task.isCancelled { self.hueError = error.localizedDescription } }
                         }
                     } catch is CancellationError { return }
                     catch {
@@ -138,11 +169,13 @@ import Observation
     func identifyHue(host: String, bridgeID: String?) async throws -> HueConfiguration { try await hue.identify(host: host, bridgeID: bridgeID) }
     func connectHue(_ config: HueConfiguration) async throws {
         let key = try await hue.pair(configuration: config)
-        let lights = try await hue.fetchLights(configuration: config, key: key)
+        let snapshot = try await hue.fetchSnapshot(configuration: config, key: key)
         try Task.checkCancellation()
-        var updated = configuration; updated.hue = config
+        var selectedConfig = config
+        selectedConfig.selectedSceneIDs = configuration.hue?.bridgeID == config.bridgeID ? configuration.hue?.selectedSceneIDs : nil
+        var updated = configuration; updated.hue = selectedConfig
         try commit(updated, account: "hue", secret: key)
-        self.lights = lights; reconnect(.hue)
+        applyHue(snapshot); reconnect(.hue)
     }
     func connectDyson(_ config: DysonConfiguration, credential: String) async throws {
         guard !config.serial.isEmpty, !credential.isEmpty, ["438", "438E", "438K", "438M"].contains(config.topicPrefix),
@@ -174,17 +207,25 @@ import Observation
             if kind == .hue { updated.hue = nil } else { updated.dyson = nil }
             try commit(updated, account: kind.rawValue, secret: nil)
             cancelCommands()
-            if kind == .hue { lights = []; hueError = nil } else { dyson = DysonSnapshot(); dysonError = nil }
+            if kind == .hue { lights = []; scenes = []; hueError = nil } else { dyson = DysonSnapshot(); dysonError = nil }
             reconnect(kind)
         } catch { storageError = error.localizedDescription }
     }
     func setLight(_ light: HueLight, on: Bool? = nil, brightness: Double? = nil) {
-        guard hueState == .online, light.reachable, !pendingLights.contains(light.id), let config = configuration.hue else { return }
+        guard hueState == .online, pendingSceneID == nil, light.reachable,
+              !pendingLights.contains(light.id), let config = configuration.hue else { return }
+        guard brightness == nil || (light.supportsBrightness && brightness!.isFinite) else { return }
+        let brightness = brightness.map { min(100, max(1, $0)) }
+        let on = brightness != nil ? true : on
         pendingLights.insert(light.id); hueError = nil
         let generation = hueGeneration, taskID = UUID()
+        hueCommandIDs.insert(taskID)
         commandTasks[taskID] = Task { [weak self] in
             guard let self else { return }
-            defer { self.pendingLights.remove(light.id); self.commandTasks[taskID] = nil }
+            defer {
+                if self.hueGeneration == generation { self.pendingLights.remove(light.id) }
+                self.hueCommandIDs.remove(taskID); self.commandTasks[taskID] = nil
+            }
             do {
                 guard let key = try self.secrets.read("hue") else { throw ControlError.authorization }
                 try await withCommandDeadline { [self] in
@@ -193,7 +234,7 @@ import Observation
                 while self.clock.now < deadline {
                     try Task.checkCancellation()
                     guard self.hueGeneration == generation, self.hueState == .online else { throw ControlError.offline }
-                    self.lights = try await self.hue.fetchLights(configuration: config, key: key)
+                    try await self.refreshHue(config, key: key, generation: generation)
                     if let current = self.lights.first(where: { $0.id == light.id }),
                        (on == nil || current.isOn == on), (brightness == nil || abs((current.brightness ?? -100) - brightness!) < 1) { return }
                     try await self.clock.sleep(seconds: 0.4)
@@ -201,7 +242,32 @@ import Observation
                 throw ControlError.timeout
                 }
             } catch is CancellationError { }
-            catch { self.hueError = error.localizedDescription }
+            catch { if self.hueGeneration == generation, !Task.isCancelled { self.hueError = error.localizedDescription } }
+        }
+    }
+    func recallScene(_ scene: HueScene) {
+        guard hueState == .online, pendingSceneID == nil, pendingLights.isEmpty,
+              scenes.contains(where: { $0.id == scene.id }),
+              visibleScenes.contains(where: { $0.id == scene.id }), let config = configuration.hue else { return }
+        pendingSceneID = scene.id; hueError = nil
+        let generation = hueGeneration, taskID = UUID()
+        hueCommandIDs.insert(taskID)
+        commandTasks[taskID] = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.hueGeneration == generation { self.pendingSceneID = nil }
+                self.hueCommandIDs.remove(taskID); self.commandTasks[taskID] = nil
+            }
+            do {
+                guard let key = try self.secrets.read("hue") else { throw ControlError.authorization }
+                try await withCommandDeadline { [self] in
+                    try await self.hue.recallScene(configuration: config, key: key, id: scene.id)
+                    try Task.checkCancellation()
+                    guard self.hueGeneration == generation, self.hueState == .online else { throw CancellationError() }
+                    try await self.refreshHue(config, key: key, generation: generation)
+                }
+            } catch is CancellationError { }
+            catch { if self.hueGeneration == generation, !Task.isCancelled { self.hueError = error.localizedDescription } }
         }
     }
     func setDyson(_ fields: [String: String]) {

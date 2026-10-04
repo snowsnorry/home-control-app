@@ -21,7 +21,9 @@ The house icon appears in the menu bar without a Dock icon. Left-click opens the
 
 ## Connect
 
-**Hue:** discover a bridge or enter its IP/hostname, continue to verify its identity, press its physical link button, then choose **Connect**. The app retrieves all lights, supports power and brightness, and observes Hue's event stream. Hue API v1 bridges are unsupported. Hue TLS is restricted to the bundled Hue root certificates and the selected bridge ID; redirects are refused. Older self-signed bridge certificates are rejected rather than accepted blindly.
+**Hue:** discover a bridge or enter its IP/hostname, continue to verify its identity, press its physical link button, then choose **Connect**. The app retrieves lights, device types, rooms and scenes, and observes Hue's event stream. Lights and smart plugs appear in a two-column grid. Power switches act independently; clicking a dimmable light opens a brightness popover. Changing brightness also turns the light on. Devices without dimming never open a brightness popover.
+
+Choose scenes in **Settings → Philips Hue → Scenes**. No scenes are selected automatically. Selected scenes appear as quick actions above the lights and are saved per bridge. Setting up the same bridge preserves the selection; selecting a different bridge resets it. Scene recall disables conflicting Hue controls until the bridge responds and the panel refreshes. Hue API v1 bridges are unsupported. Hue TLS is restricted to the bundled Hue root certificates and the selected bridge ID; redirects are refused. Older self-signed bridge certificates are rejected rather than accepted blindly.
 
 **Dyson:** use **MyDyson**, supply the two-letter country code of your account, request an email verification code, then enter your password and code. Choose your device and its discovered hostname or enter its IP address. Only the TP07-compatible 438 family is handled; the firmware variant determines the MQTT topic prefix. If necessary, use **Manual** with the IP/hostname, serial, MQTT credential and actual topic prefix (`438`, `438E`, `438K`, `438M`). The MQTT credential is not the household Wi-Fi password. Mainland China accounts are not supported in this version.
 
@@ -29,7 +31,9 @@ MyDyson uses an unofficial application API and is used only during setup. Accoun
 
 Allow **Local Network** access when macOS asks. If access has been denied, enable Home Control in **System Settings → Privacy & Security → Local Network**. Both devices must be reachable from the Mac; VPNs and guest-network isolation can prevent discovery.
 
-Temperature and humidity come from the TP07. Sensors are requested every 30 seconds. After two minutes without a valid temperature measurement, the menu bar temperature disappears; the panel retains the last reading with its update time. Continuous monitoring can be enabled explicitly in Dyson settings to receive readings while the fan is in standby. Device commands wait up to 10 seconds for confirmation and are never queued for later offline delivery.
+Temperature, humidity, PM2.5, PM10, VOC and NO₂ come directly from the TP07 over local MQTT. The purifier card shows temperature, humidity and PM2.5; the air quality label's tooltip includes the remaining pollutants. Auto/Manual changes the mode without changing power. Adjusting fan speed switches to Manual and turns the purifier on.
+
+The card's muted green/yellow/orange/red background reflects the worst fresh pollutant reading. PM2.5 boundaries are 36/54/71 µg/m³, PM10 boundaries are 51/76/101 µg/m³, and gas-index boundaries are 4/7/9 after dividing `va10` and `noxl` by ten. PM values prefer `p25r`/`p10r`, falling back to `pm25`/`pm10`. This is an app-calculated classification based on the local protocol, not a ready-made MyDyson score; exact MyDyson agreement needs hardware acceptance. Offline or missing/stale air-quality data produces a neutral background. Sensors are requested every 30 seconds. After two minutes without a valid temperature measurement, the menu bar temperature disappears; the panel retains the last reading with its update time. Continuous monitoring can be enabled explicitly in Dyson settings to receive readings while the fan is in standby. Device commands wait up to 10 seconds for confirmation and are never queued for later offline delivery.
 
 ## Validation
 
@@ -38,7 +42,15 @@ xcodebuild -project HomeControl.xcodeproj -scheme HomeControl \
   -destination 'platform=macOS' -derivedDataPath build test
 ```
 
-Tests cover message decoding, Kelvin conversion, sensor sentinels, partial updates, state persistence and rollback, offline commands, confirmation/timeouts, Hue errors and connectivity, MyDyson login and rate limiting, credential decryption and firmware topic variants. Networking fixtures contain only dummy credentials.
+Tests cover message decoding, Kelvin conversion, pollutant fallbacks and sentinels, every air-quality boundary, partial updates and stale/offline readings; scene parsing, recall requests, selection persistence, bridge changes and stale command responses; brightness-on behavior and non-dimmable devices; state persistence and rollback, offline commands, confirmation/timeouts, Hue errors and connectivity, MyDyson login and rate limiting, credential decryption and firmware topic variants.
+
+Debug builds also support `--preview-panel` with synthetic devices and in-memory settings (no Keychain or real-device traffic). Optional arguments: `--preview-theme=light|dark`, `--preview-quality=good|fair|poor|red`, `--preview-many`, and `--preview-empty`. Launch through the app bundle, for example:
+
+```sh
+open -n build/Build/Products/Debug/HomeControl.app --args --preview-panel --preview-theme=dark
+```
+
+Inspect both themes, all four quality backgrounds, long names/scrolling, a brightness popover, independent power toggles, scene activation and settings selection. Escape closes brightness before closing the main panel. Networking fixtures contain only dummy credentials.
 
 Automated tests use simulated devices and network responses. Real Hue/TP07 integration, sleep/network recovery and local control without internet require hardware acceptance.
 

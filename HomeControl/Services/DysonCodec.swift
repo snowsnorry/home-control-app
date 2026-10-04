@@ -23,6 +23,14 @@ enum DysonCodec {
                 let value = number(fields["hact"])
                 result.humidity = SensorReading(value: value.flatMap { (0...100).contains($0) ? $0 : nil }, receivedAt: now)
             }
+            if fields["p25r"] != nil || fields["pm25"] != nil {
+                result.pm25 = pollutant(fields["p25r"], fallback: fields["pm25"], now: now)
+            }
+            if fields["p10r"] != nil || fields["pm10"] != nil {
+                result.pm10 = pollutant(fields["p10r"], fallback: fields["pm10"], now: now)
+            }
+            if fields["va10"] != nil { result.voc = pollutant(fields["va10"], divisor: 10, now: now) }
+            if fields["noxl"] != nil { result.nitrogenDioxide = pollutant(fields["noxl"], divisor: 10, now: now) }
         }
         return result
     }
@@ -31,6 +39,13 @@ enum DysonCodec {
         return value as? String
     }
     static func number(_ value: Any?) -> Double? { string(value).flatMap(Double.init) }
+    private static func pollutant(_ raw: Any?, fallback: Any? = nil, divisor: Double = 1, now: Date) -> SensorReading {
+        func valid(_ raw: Any?) -> Double? {
+            guard let value = number(raw), value.isFinite, value >= 0, value <= 9999 else { return nil }
+            return value / divisor
+        }
+        return SensorReading(value: valid(raw) ?? valid(fallback), receivedAt: now)
+    }
     static func command(fields: [String: String], now: Date) throws -> String {
         try encode(message: "STATE-SET", additional: ["mode-reason": "LAPP", "data": fields], now: now)
     }
