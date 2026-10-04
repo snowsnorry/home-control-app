@@ -9,7 +9,25 @@ A Swift 6 menu bar app for macOS 27. Home Control manages one modern Hue Bridge 
 - Internet access for the initial Swift package download and MyDyson setup.
 - A compatible Hue Bridge and/or Dyson TP07 reachable over the local network.
 
-## Run
+## Build and run
+
+To build an application bundle without installing or launching it:
+
+```sh
+./script/build_and_run.sh --app-build
+```
+
+The Release bundle is saved to `dist/HomeControl.app`. An already-running app remains running.
+
+To build, install in `/Applications`, and launch the app:
+
+```sh
+./script/build_and_run.sh --app
+```
+
+Installation requires write access to `/Applications`. The script verifies the bundle's signature and refuses to replace an app with a different bundle identifier. The previous installation is retained until its replacement succeeds.
+
+### Development
 
 Open `HomeControl.xcodeproj`, select the **HomeControl** scheme and run. Xcode resolves package dependencies automatically. Alternatively, use the build and launch script from the project directory:
 
