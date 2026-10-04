@@ -156,7 +156,8 @@ final class HueTrustDelegate: NSObject, URLSessionDelegate, URLSessionTaskDelega
                   let groupID = (r["group"] as? [String: Any])?["rid"] as? String else { return nil }
             let groupName = (byID[groupID]?["metadata"] as? [String: Any])?["name"] as? String ?? String(localized: "Other scenes")
             return HueScene(id: id, name: name, groupID: groupID, groupName: groupName,
-                            active: (r["status"] as? [String: Any])?["active"] as? String)
+                            active: (r["status"] as? [String: Any])?["active"] as? String,
+                            colors: sceneColors(r))
         }.sorted {
             let groupOrder = $0.groupName.localizedStandardCompare($1.groupName)
             if groupOrder != .orderedSame { return groupOrder == .orderedAscending }
@@ -164,6 +165,33 @@ final class HueTrustDelegate: NSObject, URLSessionDelegate, URLSessionTaskDelega
             return nameOrder == .orderedSame ? $0.id < $1.id : nameOrder == .orderedAscending
         }
         return HueBridgeSnapshot(lights: lights, scenes: scenes)
+    }
+    private static func sceneColors(_ resource: [String: Any]) -> [HueSceneColor] {
+        func color(_ entry: [String: Any]) -> HueSceneColor? {
+            if let xy = (entry["color"] as? [String: Any])?["xy"] as? [String: Any],
+               let x = xy["x"] as? Double, let y = xy["y"] as? Double,
+               let color = HueSceneColor.xy(x: x, y: y) { return color }
+            if let mirek = (entry["color_temperature"] as? [String: Any])?["mirek"] as? Double {
+                return HueSceneColor.temperature(mirek: mirek)
+            }
+            return nil
+        }
+        let palette = resource["palette"] as? [String: Any] ?? [:]
+        let entries = (palette["color"] as? [[String: Any]] ?? [])
+            + (palette["color_temperature"] as? [[String: Any]] ?? [])
+        let colors = entries.compactMap(color)
+        if !colors.isEmpty { return colors }
+        // Static/custom scenes can have only per-light actions, without a palette.
+        let actions = resource["actions"] as? [[String: Any]] ?? []
+        var fallback: [HueSceneColor] = []
+        for item in actions {
+            guard let action = item["action"] as? [String: Any],
+                  (action["on"] as? [String: Any])?["on"] as? Bool != false,
+                  (action["dimming"] as? [String: Any])?["brightness"] as? Double != 0,
+                  let value = color(action), !fallback.contains(value) else { continue }
+            fallback.append(value)
+        }
+        return fallback
     }
     func fetchSnapshot(configuration: HueConfiguration, key: String) async throws -> HueBridgeSnapshot {
         let (session, _) = try session(configuration); defer { session.invalidateAndCancel() }

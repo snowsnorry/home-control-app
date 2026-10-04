@@ -12,6 +12,13 @@ import Foundation
         dyson.snapshot.pm10 = SensorReading(value: 10, receivedAt: Date())
         dyson.snapshot.voc = SensorReading(value: 1.2, receivedAt: Date())
         dyson.snapshot.nitrogenDioxide = SensorReading(value: 0.4, receivedAt: Date())
+        if arguments.contains("--preview-scene-palettes") {
+            hue.snapshot.scenes += [
+                HueScene(id: "white", name: "Cool white", groupID: "room1", groupName: "Living room", active: "inactive", colors: [.temperature(mirek: 153)!]),
+                HueScene(id: "warm", name: "Warm white with a longer scene name", groupID: "room1", groupName: "Living room", active: "inactive", colors: [.temperature(mirek: 450)!]),
+                HueScene(id: "neutral", name: "No palette", groupID: "room1", groupName: "Living room", active: "inactive")
+            ]
+        }
         hue.snapshot.scenes.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         if arguments.contains("--preview-many") {
             for index in 5...20 { hue.snapshot.lights.append(HueLight(id: UUID().uuidString, name: "Living room pendant light with a long name \(index)", isOn: index.isMultiple(of: 2), brightness: 50, reachable: true, archetype: "pendant_round")) }
@@ -32,9 +39,9 @@ import Foundation
         HueLight(id: "00000000-0000-4000-8000-000000000003", name: "Hue Smart plug 1", isOn: true, brightness: nil, reachable: true, archetype: "plug"),
         HueLight(id: "00000000-0000-4000-8000-000000000004", name: "Hue Smart plug 2", isOn: false, brightness: nil, reachable: true, archetype: "plug")
     ], scenes: [
-        HueScene(id: "00000000-0000-4000-8000-000000000011", name: "Relax", groupID: "room1", groupName: "Living room", active: "inactive"),
-        HueScene(id: "00000000-0000-4000-8000-000000000012", name: "Focus", groupID: "room1", groupName: "Living room", active: "inactive"),
-        HueScene(id: "00000000-0000-4000-8000-000000000013", name: "Evening", groupID: "room1", groupName: "Living room", active: "inactive")
+        HueScene(id: "00000000-0000-4000-8000-000000000011", name: "Arctic aurora", groupID: "room1", groupName: "Living room", active: "inactive", colors: [.xy(x: 0.19, y: 0.24)!, .xy(x: 0.21, y: 0.38)!, .xy(x: 0.27, y: 0.14)!]),
+        HueScene(id: "00000000-0000-4000-8000-000000000012", name: "Spring blossom", groupID: "room1", groupName: "Living room", active: "inactive", colors: [.xy(x: 0.45, y: 0.24)!, .xy(x: 0.51, y: 0.31)!, .xy(x: 0.34, y: 0.22)!]),
+        HueScene(id: "00000000-0000-4000-8000-000000000013", name: "Evening", groupID: "room1", groupName: "Living room", active: "static", colors: [.xy(x: 0.57, y: 0.4)!, .xy(x: 0.64, y: 0.33)!, .xy(x: 0.41, y: 0.2)!])
     ])
     func identify(host: String, bridgeID: String?) async throws -> HueConfiguration { throw ControlError.offline }
     func pair(configuration: HueConfiguration) async throws -> String { throw ControlError.offline }

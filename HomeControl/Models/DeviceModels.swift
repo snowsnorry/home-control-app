@@ -21,7 +21,45 @@ struct HueScene: Identifiable, Equatable, Sendable {
     var groupID: String
     var groupName: String
     var active: String?
+    var colors: [HueSceneColor] = []
+    // Hue supplies an ordered palette, with no separate dominant-color field.
+    var primaryColor: HueSceneColor? { colors.first }
     var isActive: Bool { active == "static" || active == "dynamic_palette" }
+}
+
+/// Display colors are normalized independently of lamp brightness, so dim scenes remain recognizable.
+struct HueSceneColor: Equatable, Sendable {
+    let red: Double
+    let green: Double
+    let blue: Double
+
+    static func xy(x: Double, y: Double) -> HueSceneColor? {
+        guard x.isFinite, y.isFinite, x >= 0, y >= 0.00001, x + y <= 1 else { return nil }
+        let X = x / y
+        let Z = (1 - x - y) / y
+        // Hue Wide RGB D65 matrix and inverse sRGB transfer function.
+        // https://github.com/home-assistant/core/blob/dev/homeassistant/util/color.py
+        let linear = [1.656492 * X - 0.354851 - 0.255038 * Z,
+                      -0.707196 * X + 1.655397 + 0.036152 * Z,
+                      0.051713 * X - 0.121364 + 1.011530 * Z]
+        let rgb = linear.map { value in
+            max(0, value <= 0.0031308 ? 12.92 * value : 1.055 * pow(value, 1 / 2.4) - 0.055)
+        }
+        let scale = max(1, rgb.max() ?? 1)
+        return HueSceneColor(red: rgb[0] / scale, green: rgb[1] / scale, blue: rgb[2] / scale)
+    }
+
+    static func temperature(mirek: Double) -> HueSceneColor? {
+        guard mirek.isFinite, (153...500).contains(mirek) else { return nil }
+        let temperature = 10_000 / mirek
+        // Black-body approximation by Tanner Helland, also used by Home Assistant.
+        let red = temperature <= 66 ? 255 : 329.698727446 * pow(temperature - 60, -0.1332047592)
+        let green = temperature <= 66 ? 99.4708025861 * log(temperature) - 161.1195681661
+            : 288.1221695283 * pow(temperature - 60, -0.0755148492)
+        let blue = temperature >= 66 ? 255 : (temperature <= 19 ? 0 : 138.5177312231 * log(temperature - 10) - 305.0447927307)
+        return HueSceneColor(red: min(255, max(0, red)) / 255,
+                             green: min(255, max(0, green)) / 255, blue: min(255, max(0, blue)) / 255)
+    }
 }
 struct HueBridgeSnapshot: Equatable, Sendable {
     var lights: [HueLight] = []

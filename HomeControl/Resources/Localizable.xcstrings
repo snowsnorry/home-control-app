@@ -12,6 +12,17 @@
         }
       }
     },
+    "%lld points": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld points"
+          }
+        }
+      }
+    },
     "%lld%%": {
       "extractionState": "manual",
       "localizations": {
@@ -96,6 +107,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "Adjust brightness for %@"
+          }
+        }
+      }
+    },
+    "Adjust the panel height to show more content.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Adjust the panel height to show more content."
           }
         }
       }
@@ -404,6 +426,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "Devices"
+          }
+        }
+      }
+    },
+    "Drag to resize the panel. Double-click to show all content.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Drag to resize the panel. Double-click to show all content."
           }
         }
       }
@@ -987,6 +1020,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "PM2.5"
+          }
+        }
+      }
+    },
+    "Panel height": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Panel height"
           }
         }
       }

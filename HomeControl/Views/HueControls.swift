@@ -113,8 +113,6 @@ struct HueBrightnessPopover: View {
 
 struct HueScenesView: View {
     var store: HomeStore
-    private let colors: [Color] = [.orange, .cyan, .purple]
-    private let symbols = ["sunrise.fill", "sun.max.fill", "moon.fill"]
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -124,27 +122,84 @@ struct HueScenesView: View {
             }
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
                 ForEach(store.visibleScenes) { scene in
-                    let index = store.visibleScenes.firstIndex(where: { $0.id == scene.id }) ?? 0
-                    let color = colors[index % colors.count]
                     Button { store.recallScene(scene) } label: {
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack(spacing: 7) {
-                                if store.pendingSceneID == scene.id { ProgressView().controlSize(.mini) }
-                                else { Image(systemName: symbols[index % symbols.count]).foregroundStyle(color).font(.title3).accessibilityHidden(true) }
-                                Text(scene.name).font(.system(size: 12, weight: .semibold)).lineLimit(2)
-                            }
-                            Text(scene.groupName).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
-                        }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).padding(10)
-                            .background(color.opacity(0.09), in: RoundedRectangle(cornerRadius: 11))
-                            .overlay { RoundedRectangle(cornerRadius: 11).strokeBorder(scene.isActive ? color.opacity(0.8) : color.opacity(0.25), lineWidth: scene.isActive ? 1.5 : 0.75) }
-                            .contentShape(RoundedRectangle(cornerRadius: 11))
+                        HueSceneCard(scene: scene, pending: store.pendingSceneID == scene.id)
                     }.buttonStyle(.plain)
                         .disabled(store.hueState != .online || store.pendingSceneID != nil || !store.pendingLights.isEmpty)
                         .help(scene.name + " · " + scene.groupName)
                         .accessibilityLabel(Text("Activate \(scene.name) in \(scene.groupName)"))
-                        .accessibilityValue(scene.isActive ? Text("Active") : Text("Inactive"))
+                        .accessibilityValue(store.pendingSceneID == scene.id ? Text("Waiting for device confirmation")
+                                            : scene.isActive ? Text("Active") : Text("Inactive"))
                 }
             }
         }
+    }
+}
+
+private struct HueSceneCard: View {
+    let scene: HueScene
+    let pending: Bool
+    @Environment(\.colorScheme) private var colorScheme
+    private var tint: Color { scene.primaryColor.map(Color.init(sceneColor:)) ?? .secondary }
+    private var border: Color {
+        // Blend a semantic color into the scene tint so white/yellow palettes still have a visible outline.
+        let value = scene.primaryColor
+        let base = colorScheme == .dark ? 1.0 : 0.0
+        return value.map { Color(red: $0.red * 0.65 + base * 0.35,
+                                 green: $0.green * 0.65 + base * 0.35,
+                                 blue: $0.blue * 0.65 + base * 0.35) } ?? .secondary
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            ScenePaletteThumbnail(colors: scene.colors)
+                .frame(height: 30)
+                .overlay(alignment: .trailing) {
+                    if pending || scene.isActive {
+                        ZStack {
+                            Circle().fill(.black.opacity(0.6))
+                            if pending { ProgressView().controlSize(.mini).tint(.white) }
+                            else { Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)).foregroundStyle(.white) }
+                        }.frame(width: 20, height: 20).padding(5)
+                    }
+                }
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(scene.name).font(.system(size: 12, weight: .semibold))
+                    .lineLimit(2, reservesSpace: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text(scene.groupName).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
+        .padding(10)
+        .background {
+            RoundedRectangle(cornerRadius: 11)
+                .fill(colorScheme == .dark ? Color.white.opacity(0.045) : Color.white.opacity(0.52))
+                .overlay { RoundedRectangle(cornerRadius: 11).fill(tint.opacity(colorScheme == .dark ? 0.14 : 0.10)) }
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 11)
+                .strokeBorder(border.opacity(scene.isActive ? 0.9 : 0.25), lineWidth: scene.isActive ? 1.5 : 0.75)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 11))
+    }
+}
+
+private struct ScenePaletteThumbnail: View {
+    let colors: [HueSceneColor]
+    var body: some View {
+        LinearGradient(colors: colors.isEmpty ? [Color.secondary.opacity(0.15), Color.secondary.opacity(0.3)]
+                       : colors.map(Color.init(sceneColor:)), startPoint: .leading, endPoint: .trailing)
+            .overlay {
+                LinearGradient(colors: [.white.opacity(0.18), .clear, .black.opacity(0.10)],
+                               startPoint: .topLeading, endPoint: .bottomTrailing)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(.primary.opacity(0.08), lineWidth: 0.5) }
+    }
+}
+
+private extension Color {
+    init(sceneColor: HueSceneColor) {
+        self.init(.sRGB, red: sceneColor.red, green: sceneColor.green, blue: sceneColor.blue, opacity: 1)
     }
 }

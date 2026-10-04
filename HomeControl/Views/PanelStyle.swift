@@ -1,13 +1,72 @@
 import SwiftUI
+import AppKit
 import Observation
 
 @MainActor @Observable final class PanelPresentation {
     struct LightSelection: Identifiable { let id: String }
     var selectedLight: LightSelection?
+    var preferredPanelHeight: CGFloat?
     func closeBrightness() -> Bool {
         guard selectedLight != nil else { return false }
         selectedLight = nil
         return true
+    }
+}
+
+struct PanelHeightLimits: Equatable {
+    static let resizeHandleHeight: CGFloat = 12
+    let minimum: CGFloat
+    let maximum: CGFloat
+    var canResize: Bool { maximum > minimum + 0.5 }
+
+    init(contentHeight: CGFloat, availableHeight: CGFloat) {
+        minimum = min(700, contentHeight, availableHeight)
+        let handleHeight = contentHeight > minimum && availableHeight > minimum ? Self.resizeHandleHeight : 0
+        maximum = min(contentHeight + handleHeight, availableHeight)
+    }
+    func height(preferred: CGFloat?) -> CGFloat { min(maximum, max(minimum, preferred ?? minimum)) }
+}
+
+/// Native mouse tracking keeps the drag in screen coordinates as the popover itself grows.
+struct PanelResizeHandle: NSViewRepresentable {
+    var height: CGFloat
+    var limits: PanelHeightLimits
+    var resize: (CGFloat) -> Void
+
+    func makeNSView(context: Context) -> ResizeView { ResizeView() }
+    func updateNSView(_ view: ResizeView, context: Context) {
+        view.height = height; view.limits = limits; view.resize = resize
+        view.toolTip = String(localized: "Drag to resize the panel. Double-click to show all content.")
+    }
+    final class ResizeView: NSView {
+        var height: CGFloat = 700
+        var limits = PanelHeightLimits(contentHeight: 700, availableHeight: 700)
+        var resize: (CGFloat) -> Void = { _ in }
+        private var dragStart: (y: CGFloat, height: CGFloat)?
+        override var acceptsFirstResponder: Bool { true }
+        override var mouseDownCanMoveWindow: Bool { false }
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+        override func resetCursorRects() { addCursorRect(bounds, cursor: .resizeUpDown) }
+        override func mouseDown(with event: NSEvent) {
+            window?.makeFirstResponder(self)
+            if event.clickCount == 2 { resize(limits.maximum); return }
+            guard let window else { return }
+            dragStart = (window.convertPoint(toScreen: event.locationInWindow).y, height)
+        }
+        override func mouseDragged(with event: NSEvent) {
+            guard let start = dragStart, let window else { return }
+            resize(limits.height(preferred: start.height + start.y - window.convertPoint(toScreen: event.locationInWindow).y))
+        }
+        override func mouseUp(with event: NSEvent) { dragStart = nil }
+        override func keyDown(with event: NSEvent) {
+            switch event.keyCode {
+            case 125: resize(limits.height(preferred: height + 20))
+            case 126: resize(limits.height(preferred: height - 20))
+            case 115: resize(limits.minimum)
+            case 119: resize(limits.maximum)
+            default: super.keyDown(with: event)
+            }
+        }
     }
 }
 

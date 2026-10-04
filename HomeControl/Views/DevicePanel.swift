@@ -8,7 +8,8 @@ struct DevicePanel: View {
     var openSettings: (DeviceKind?) -> Void
     @State private var headerHeight: CGFloat = 64
     @State private var contentHeight: CGFloat = 400
-    private var panelHeight: CGFloat { min(maximumHeight, headerHeight + contentHeight) }
+    private var heightLimits: PanelHeightLimits { PanelHeightLimits(contentHeight: headerHeight + contentHeight, availableHeight: maximumHeight) }
+    private var panelHeight: CGFloat { heightLimits.height(preferred: presentation.preferredPanelHeight) }
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -28,6 +29,22 @@ struct DevicePanel: View {
                 }.padding(20)
                     .onGeometryChange(for: CGFloat.self) { ceil($0.size.height) } action: { contentHeight = $0 }
             }.scrollBounceBehavior(.basedOnSize)
+            if heightLimits.canResize {
+                PanelResizeHandle(height: panelHeight, limits: heightLimits) { height in
+                    presentation.preferredPanelHeight = heightLimits.height(preferred: height)
+                }
+                .frame(height: PanelHeightLimits.resizeHandleHeight)
+                .background {
+                    Capsule().fill(.secondary.opacity(0.35)).frame(width: 30, height: 3)
+                }
+                .accessibilityRepresentation {
+                    Slider(value: Binding(get: { panelHeight }, set: { height in
+                        presentation.preferredPanelHeight = heightLimits.height(preferred: height)
+                    }), in: heightLimits.minimum...heightLimits.maximum, step: 20) { Text("Panel height") }
+                        .accessibilityValue(Text("\(Int(panelHeight)) points"))
+                        .accessibilityHint("Adjust the panel height to show more content.")
+                }
+            }
         }.frame(width: 480, height: panelHeight, alignment: .top)
             .onChange(of: panelHeight, initial: true) { _, height in heightChanged(height) }
             .onChange(of: store.lights) { _, _ in dismissUnavailableLight() }

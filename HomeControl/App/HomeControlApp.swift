@@ -34,6 +34,14 @@ import Network
     private var lastBadge: String?
     private var escapeMonitor: Any?
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        if let theme = CommandLine.arguments.first(where: { $0.hasPrefix("--preview-theme=") }), CommandLine.arguments.contains("--preview-panel") {
+            let appearance = NSAppearance(named: theme.hasSuffix("dark") ? .darkAqua : .aqua)
+            NSApp.appearance = appearance
+            // A status-item popover can inherit the menu bar's appearance instead of the app's.
+            popover.appearance = appearance
+        }
+        #endif
         let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         self.statusItem = statusItem
         if let button = statusItem.button {
@@ -70,9 +78,6 @@ import Network
         }
         installApplicationMenu()
         #if DEBUG
-        if let theme = CommandLine.arguments.first(where: { $0.hasPrefix("--preview-theme=") }), CommandLine.arguments.contains("--preview-panel") {
-            NSApp.appearance = NSAppearance(named: theme.hasSuffix("dark") ? .darkAqua : .aqua)
-        }
         if CommandLine.arguments.contains("--preview-panel") {
             Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(200))
@@ -109,7 +114,7 @@ import Network
             menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height), in: sender)
         } else if popover.isShown { popover.performClose(nil) }
         else {
-            let height = min(700, max(240, (sender.window?.screen?.visibleFrame.height ?? 740) - 40))
+            let height = max(1, (sender.window?.screen?.visibleFrame.height ?? 740) - 40)
             popover.contentSize = NSSize(width: 480, height: min(popover.contentSize.height, height))
             if let controller = popover.contentViewController as? NSHostingController<DevicePanel> {
                 controller.rootView = makeDevicePanel(maximumHeight: height)
@@ -122,7 +127,10 @@ import Network
     private func makeDevicePanel(maximumHeight: CGFloat = 700) -> DevicePanel {
         DevicePanel(store: store, presentation: presentation, maximumHeight: maximumHeight, heightChanged: { [weak self] height in
             guard let self, abs(self.popover.contentSize.height - height) > 0.5 else { return }
+            let animates = self.popover.animates
+            self.popover.animates = false
             self.popover.contentSize = NSSize(width: 480, height: height)
+            self.popover.animates = animates
         }, openSettings: { [weak self] in self?.showSettings($0) })
     }
     func popoverDidClose(_ notification: Notification) { presentation.selectedLight = nil }

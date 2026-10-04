@@ -567,3 +567,102 @@ final class AirQualityTests: XCTestCase {
         }
     }
 }
+
+@MainActor final class ScenePaletteTests: XCTestCase {
+    private func scene(_ values: [String: Any]) throws -> HueScene {
+        var resource = values
+        resource.merge(["id": "scene", "type": "scene", "metadata": ["name": "Palette"], "group": ["rid": "room"]]) { _, new in new }
+        let data = try JSONSerialization.data(withJSONObject: ["errors": [], "data": [resource]])
+        return try XCTUnwrap(HueClient.parseSnapshot(data).scenes.first)
+    }
+    private func xy(_ x: Double, _ y: Double) -> [String: Any] { ["color": ["xy": ["x": x, "y": y]]] }
+
+    func testPalettePreservesBridgeOrderAndOverridesActions() throws {
+        let value = try scene(["palette": ["color": [xy(0.19, 0.24), xy(0.64, 0.33)]],
+                               "actions": [["action": xy(0.45, 0.24)]]])
+        XCTAssertEqual(value.colors, [.xy(x: 0.19, y: 0.24)!, .xy(x: 0.64, y: 0.33)!])
+        XCTAssertEqual(value.primaryColor, value.colors.first)
+    }
+    func testWhitePaletteAndMixedPalette() throws {
+        let value = try scene(["palette": ["color": [xy(0.19, 0.24)],
+                                           "color_temperature": [["color_temperature": ["mirek": 450]]]]])
+        XCTAssertEqual(value.colors.count, 2)
+        XCTAssertEqual(value.colors.last, .temperature(mirek: 450))
+        let white = try scene(["palette": ["color_temperature": [["color_temperature": ["mirek": 153]]]]])
+        XCTAssertEqual(white.primaryColor, .temperature(mirek: 153))
+    }
+    func testStaticActionsIgnoreOffAndZeroBrightnessAndDeduplicate() throws {
+        var off = xy(0.45, 0.24); off["on"] = ["on": false]
+        var zero = xy(0.64, 0.33); zero["dimming"] = ["brightness": 0]
+        var dim = xy(0.19, 0.24); dim["dimming"] = ["brightness": 1]
+        let value = try scene(["actions": [off, zero, dim, dim, ["color_temperature": ["mirek": 400]], [:]].map { ["action": $0] }])
+        XCTAssertEqual(value.colors, [.xy(x: 0.19, y: 0.24)!, .temperature(mirek: 400)!])
+    }
+    func testMalformedPaletteSkipsBadEntriesAndFallsBackToActions() throws {
+        let value = try scene(["palette": ["color": [xy(0.3, 0), xy(0.8, 0.8), xy(0.19, 0.24), ["color": ["xy": ["x": "wrong", "y": 0.4]]]],
+                                           "color_temperature": [["color_temperature": ["mirek": 0]]]]])
+        XCTAssertEqual(value.colors, [.xy(x: 0.19, y: 0.24)!])
+        let fallback = try scene(["palette": ["color": [xy(-1, 0.4)]], "actions": [["action": xy(0.45, 0.24)]]])
+        XCTAssertEqual(fallback.colors, [.xy(x: 0.45, y: 0.24)!])
+        let neutral = try scene([:])
+        XCTAssertTrue(neutral.colors.isEmpty); XCTAssertNil(neutral.primaryColor)
+    }
+    func testXYConversionProducesRecognizableNormalizedDisplayColors() throws {
+        let red = try XCTUnwrap(HueSceneColor.xy(x: 0.675, y: 0.322))
+        XCTAssertEqual(red.red, 1, accuracy: 0.001); XCTAssertLessThan(red.green, 0.3); XCTAssertLessThan(red.blue, 0.1)
+        let blue = try XCTUnwrap(HueSceneColor.xy(x: 0.1355, y: 0.0399))
+        XCTAssertEqual(blue.blue, 1, accuracy: 0.001); XCTAssertLessThan(blue.red, 0.1)
+        let white = try XCTUnwrap(HueSceneColor.xy(x: 0.3127, y: 0.3290))
+        XCTAssertGreaterThan(min(white.red, white.green, white.blue), 0.9)
+        for color in [red, blue, white] {
+            for channel in [color.red, color.green, color.blue] { XCTAssertTrue(channel.isFinite && (0...1).contains(channel)) }
+        }
+    }
+    func testTemperatureConversionAndInvalidCoordinates() throws {
+        let warm = try XCTUnwrap(HueSceneColor.temperature(mirek: 500))
+        let cool = try XCTUnwrap(HueSceneColor.temperature(mirek: 153))
+        XCTAssertGreaterThan(warm.red, warm.blue + 0.5); XCTAssertGreaterThan(cool.blue, warm.blue)
+        XCTAssertGreaterThan(cool.green, 0.9)
+        for (x, y) in [(Double.nan, 0.3), (0.3, Double.infinity), (-0.1, 0.3), (0.3, 0), (0.8, 0.8)] {
+            XCTAssertNil(HueSceneColor.xy(x: x, y: y))
+        }
+        for mirek in [0, 152, 501, Double.nan, Double.infinity] { XCTAssertNil(HueSceneColor.temperature(mirek: mirek)) }
+    }
+}
+
+@MainActor final class PanelHeightTests: XCTestCase {
+    func testTallScreenStartsAtExistingHeightAndExpandsToAllContent() {
+        let limits = PanelHeightLimits(contentHeight: 920, availableHeight: 1400)
+        XCTAssertEqual(limits.height(preferred: nil), 700)
+        XCTAssertEqual(limits.maximum, 932)
+        XCTAssertTrue(limits.canResize)
+        XCTAssertEqual(limits.height(preferred: 2000), 932)
+        XCTAssertEqual(limits.height(preferred: 300), 700)
+    }
+    func testShortContentDoesNotCreateBlankSpaceOrAResizeHandle() {
+        let limits = PanelHeightLimits(contentHeight: 480, availableHeight: 1400)
+        XCTAssertEqual(limits.minimum, 480); XCTAssertEqual(limits.maximum, 480)
+        XCTAssertFalse(limits.canResize)
+        XCTAssertEqual(limits.height(preferred: 900), 480)
+    }
+    func testScreenBoundsCapHeightEvenWhenContentIsLonger() {
+        let limits = PanelHeightLimits(contentHeight: 1600, availableHeight: 1080)
+        XCTAssertEqual(limits.maximum, 1080)
+        XCTAssertEqual(limits.height(preferred: 2000), 1080)
+        let smallScreen = PanelHeightLimits(contentHeight: 920, availableHeight: 620)
+        XCTAssertEqual(smallScreen.minimum, 620); XCTAssertEqual(smallScreen.maximum, 620)
+        XCTAssertFalse(smallScreen.canResize)
+    }
+    func testPreferredHeightSurvivesPopoverDismissalAndAdaptsToContentAndScreen() {
+        let presentation = PanelPresentation()
+        presentation.preferredPanelHeight = 850
+        presentation.selectedLight = .init(id: "lamp")
+        XCTAssertTrue(presentation.closeBrightness())
+        let reopened = PanelHeightLimits(contentHeight: 920, availableHeight: 1400)
+        XCTAssertEqual(reopened.height(preferred: presentation.preferredPanelHeight), 850)
+        let fewerDevices = PanelHeightLimits(contentHeight: 780, availableHeight: 1400)
+        XCTAssertEqual(fewerDevices.height(preferred: presentation.preferredPanelHeight), 792)
+        let smallerScreen = PanelHeightLimits(contentHeight: 920, availableHeight: 740)
+        XCTAssertEqual(smallerScreen.height(preferred: presentation.preferredPanelHeight), 740)
+    }
+}
