@@ -5,6 +5,10 @@ struct DysonCard: View {
     @Environment(\.colorScheme) private var colorScheme
     private var enabled: Bool { store.dysonState == .online && !store.dysonPending }
     private var quality: AirQuality? { store.dyson.airQuality(at: store.now, connected: store.dysonState == .online) }
+    private var dominantPollutant: DysonPollutantReading? {
+        store.dyson.dominantPollutant(at: store.now)
+            ?? store.dyson.dominantPollutant(at: store.now, requireFresh: false)
+    }
     private var background: Color {
         guard let quality else { return Color.primary.opacity(0.04) }
         return Color(rgb: colorScheme == .dark ? quality.darkBackground : quality.lightBackground)
@@ -39,7 +43,7 @@ struct DysonCard: View {
                         Divider().frame(height: 44)
                         SensorMetric(title: "Humidity", symbol: "humidity", reading: store.dyson.humidity, unit: "%", fraction: 0, connected: store.dysonState == .online, now: store.now)
                         Divider().frame(height: 44)
-                        SensorMetric(title: "PM2.5", symbol: "leaf", reading: store.dyson.pm25, unit: "µg/m³", fraction: 0, connected: store.dysonState == .online, now: store.now)
+                        SensorMetric(title: LocalizedStringKey(dominantPollutant?.pollutant.title ?? "PM2.5"), symbol: (dominantPollutant?.pollutant ?? .pm25).symbol, reading: dominantPollutant?.reading, unit: dominantPollutant?.pollutant.unit ?? "µg/m³", fraction: dominantPollutant?.pollutant.fraction ?? 0, connected: store.dysonState == .online, now: store.now)
                     }
                     Picker("Mode", selection: Binding(get: { store.dyson.autoMode }, set: { store.setDyson(["auto": $0 ? "ON" : "OFF"]) })) {
                         Text("Auto").tag(true)
@@ -63,14 +67,25 @@ struct DysonCard: View {
         }
     }
     private var pollutantSummary: String {
-        [("PM2.5", store.dyson.pm25, "µg/m³"), ("PM10", store.dyson.pm10, "µg/m³"),
-         ("VOC", store.dyson.voc, ""), ("NO₂", store.dyson.nitrogenDioxide, "")].map { label, reading, unit in
+        DysonPollutant.allCases.map { pollutant in
+            let label = pollutant.title, reading = pollutant.reading(in: store.dyson), unit = pollutant.unit
             guard let value = reading?.value else { return label + ": —" }
             let formatted = value.formatted(.number.precision(.fractionLength(0...1)))
             let stale = store.dysonState != .online || reading?.isFresh(at: store.now) != true
             let suffix = stale ? " · " + String(localized: "Last updated \(reading!.receivedAt.formatted(date: .omitted, time: .shortened))") : ""
             return label + ": " + formatted + (unit.isEmpty ? "" : " " + unit) + suffix
         }.joined(separator: "\n")
+    }
+}
+
+private extension DysonPollutant {
+    var symbol: String {
+        switch self {
+        case .pm25: "aqi.medium"
+        case .pm10: "camera.macro"
+        case .voc: "flask"
+        case .nitrogenDioxide: "car"
+        }
     }
 }
 

@@ -70,6 +70,47 @@ struct SensorReading: Equatable, Sendable {
     var receivedAt: Date
     func isFresh(at date: Date) -> Bool { value != nil && date.timeIntervalSince(receivedAt) < 120 }
 }
+enum DysonPollutant: CaseIterable, Sendable {
+    case pm25, pm10, voc, nitrogenDioxide
+
+    var title: String {
+        switch self { case .pm25: "PM2.5"; case .pm10: "PM10"; case .voc: "VOC"; case .nitrogenDioxide: "NO₂" }
+    }
+    var unit: String { self == .pm25 || self == .pm10 ? "µg/m³" : "" }
+    var fraction: Int { self == .pm25 || self == .pm10 ? 0 : 1 }
+    var boundaries: [Double] {
+        switch self {
+        case .pm25: [36, 54, 71]
+        case .pm10: [51, 76, 101]
+        case .voc, .nitrogenDioxide: [4, 7, 9]
+        }
+    }
+    func reading(in snapshot: DysonSnapshot) -> SensorReading? {
+        switch self {
+        case .pm25: snapshot.pm25
+        case .pm10: snapshot.pm10
+        case .voc: snapshot.voc
+        case .nitrogenDioxide: snapshot.nitrogenDioxide
+        }
+    }
+    // Compare unlike units on the existing quality scale. Within a band,
+    // interpolate toward the next boundary; above the last, extend its interval.
+    func severity(for value: Double) -> Double {
+        let limits = [0.0] + boundaries
+        for index in 0..<(limits.count - 1) where value < limits[index + 1] {
+            return Double(index) + (value - limits[index]) / (limits[index + 1] - limits[index])
+        }
+        return 3 + (value - limits[3]) / (limits[3] - limits[2])
+    }
+}
+struct DysonPollutantReading {
+    var pollutant: DysonPollutant
+    var reading: SensorReading
+    var severity: Double
+    var quality: AirQuality {
+        AirQuality(rawValue: pollutant.boundaries.filter { reading.value! >= $0 }.count)!
+    }
+}
 struct DysonSnapshot: Equatable, Sendable {
     var isOn = false
     var autoMode = false
@@ -85,14 +126,21 @@ struct DysonSnapshot: Equatable, Sendable {
 
     func airQuality(at date: Date, connected: Bool) -> AirQuality? {
         guard connected else { return nil }
-        let levels = [(pm25, [36.0, 54, 71]), (pm10, [51.0, 76, 101]),
-                      (voc, [4.0, 7, 9]), (nitrogenDioxide, [4.0, 7, 9])]
-            .compactMap { reading, boundaries -> AirQuality? in
-                guard let reading, reading.isFresh(at: date), let value = reading.value,
-                      value.isFinite, value >= 0 else { return nil }
-                return AirQuality(rawValue: boundaries.filter { value >= $0 }.count)
+        return dominantPollutant(at: date)?.quality
+    }
+
+    func dominantPollutant(at date: Date, requireFresh: Bool = true) -> DysonPollutantReading? {
+        var dominant: DysonPollutantReading?
+        for pollutant in DysonPollutant.allCases {
+            guard let reading = pollutant.reading(in: self), let value = reading.value,
+                  value.isFinite, value >= 0, !requireFresh || reading.isFresh(at: date) else { continue }
+            let severity = pollutant.severity(for: value)
+            // Keep declaration order for exact ties, rather than switching labels.
+            if dominant == nil || severity > dominant!.severity {
+                dominant = DysonPollutantReading(pollutant: pollutant, reading: reading, severity: severity)
             }
-        return levels.max(by: { $0.rawValue < $1.rawValue })
+        }
+        return dominant
     }
 }
 enum AirQuality: Int, CaseIterable {

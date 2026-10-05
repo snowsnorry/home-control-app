@@ -365,6 +365,65 @@ final class HueTrustTests: XCTestCase {
 
 final class AirQualityTests: XCTestCase {
     let now = Date(timeIntervalSince1970: 1000)
+    func testDominantPollutantUsesQualityScaleInsteadOfRawValues() {
+        var snapshot = DysonSnapshot()
+        snapshot.pm25 = SensorReading(value: 14, receivedAt: now)
+        snapshot.pm10 = SensorReading(value: 20, receivedAt: now)
+        snapshot.voc = SensorReading(value: 5.2, receivedAt: now)
+        snapshot.nitrogenDioxide = SensorReading(value: 0.4, receivedAt: now)
+        let dominant = snapshot.dominantPollutant(at: now)
+        XCTAssertEqual(dominant?.pollutant, .voc)
+        XCTAssertEqual(dominant?.reading.value, 5.2)
+        XCTAssertEqual(dominant?.quality, .fair)
+        XCTAssertEqual(dominant?.pollutant.unit, "")
+        XCTAssertEqual(dominant?.pollutant.fraction, 1)
+    }
+    func testEachPollutantCanDominate() {
+        for pollutant in DysonPollutant.allCases {
+            var snapshot = DysonSnapshot()
+            snapshot.pm25 = SensorReading(value: 0, receivedAt: now)
+            snapshot.pm10 = SensorReading(value: 0, receivedAt: now)
+            snapshot.voc = SensorReading(value: 0, receivedAt: now)
+            snapshot.nitrogenDioxide = SensorReading(value: 0, receivedAt: now)
+            let reading = SensorReading(value: pollutant.boundaries[2], receivedAt: now)
+            switch pollutant {
+            case .pm25: snapshot.pm25 = reading
+            case .pm10: snapshot.pm10 = reading
+            case .voc: snapshot.voc = reading
+            case .nitrogenDioxide: snapshot.nitrogenDioxide = reading
+            }
+            XCTAssertEqual(snapshot.dominantPollutant(at: now)?.pollutant, pollutant)
+            XCTAssertEqual(snapshot.airQuality(at: now, connected: true), .veryPoor)
+        }
+    }
+    func testDominantPollutantComparesWithinBandsAndKeepsExactTiesStable() {
+        var snapshot = DysonSnapshot()
+        snapshot.pm25 = SensorReading(value: 42, receivedAt: now)
+        snapshot.voc = SensorReading(value: 6, receivedAt: now)
+        XCTAssertEqual(snapshot.dominantPollutant(at: now)?.pollutant, .voc)
+        snapshot.pm25?.value = 36
+        snapshot.voc?.value = 4
+        XCTAssertEqual(snapshot.dominantPollutant(at: now)?.pollutant, .pm25)
+        snapshot.pm25?.value = 18
+        snapshot.voc?.value = 3
+        XCTAssertEqual(snapshot.dominantPollutant(at: now)?.pollutant, .voc)
+        snapshot.pm25?.value = 80
+        snapshot.voc?.value = 12
+        XCTAssertEqual(snapshot.dominantPollutant(at: now)?.pollutant, .voc)
+    }
+    func testDominantPollutantIgnoresStaleAndInvalidReadings() {
+        var snapshot = DysonSnapshot()
+        snapshot.pm25 = SensorReading(value: 14, receivedAt: now)
+        snapshot.voc = SensorReading(value: 9, receivedAt: now.addingTimeInterval(-120))
+        snapshot.pm10 = SensorReading(value: .infinity, receivedAt: now)
+        snapshot.nitrogenDioxide = SensorReading(value: -1, receivedAt: now)
+        XCTAssertEqual(snapshot.dominantPollutant(at: now)?.pollutant, .pm25)
+        let later = now.addingTimeInterval(120)
+        XCTAssertNil(snapshot.dominantPollutant(at: later))
+        XCTAssertEqual(snapshot.dominantPollutant(at: later, requireFresh: false)?.pollutant, .voc)
+        snapshot.pm25 = nil; snapshot.voc = nil
+        XCTAssertNil(snapshot.dominantPollutant(at: later, requireFresh: false))
+    }
     func testEveryBoundary() {
         for (keyPath, boundaries) in [(\DysonSnapshot.pm25, [36.0, 54, 71]), (\DysonSnapshot.pm10, [51.0, 76, 101]),
                                        (\DysonSnapshot.voc, [4.0, 7, 9]), (\DysonSnapshot.nitrogenDioxide, [4.0, 7, 9])] {
