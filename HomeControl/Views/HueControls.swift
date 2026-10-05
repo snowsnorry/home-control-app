@@ -120,7 +120,7 @@ struct HueScenesView: View {
                 Spacer()
                 Text("Quick lighting moods").font(.caption).foregroundStyle(.secondary)
             }
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
+            EqualHeightSceneLayout {
                 ForEach(store.visibleScenes) { scene in
                     Button { store.recallScene(scene) } label: {
                         HueSceneCard(scene: scene, pending: store.pendingSceneID == scene.id)
@@ -132,6 +132,37 @@ struct HueScenesView: View {
                                             : scene.isActive ? Text("Active") : Text("Inactive"))
                 }
             }
+        }
+    }
+}
+
+private struct EqualHeightSceneLayout: Layout {
+    private let columns = 3
+    private let spacing: CGFloat = 8
+
+    private func cardSize(width: CGFloat, subviews: Subviews) -> CGSize {
+        let cardWidth = max(0, (width - CGFloat(columns - 1) * spacing) / CGFloat(columns))
+        let height = subviews.map {
+            $0.sizeThatFits(ProposedViewSize(width: cardWidth, height: nil)).height
+        }.max() ?? 0
+        return CGSize(width: cardWidth, height: ceil(height))
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard !subviews.isEmpty else { return .zero }
+        let width = proposal.width ?? ((subviews.map { $0.sizeThatFits(.unspecified).width }.max() ?? 0)
+                                      * CGFloat(columns) + CGFloat(columns - 1) * spacing)
+        let card = cardSize(width: width, subviews: subviews)
+        let rows = (subviews.count + columns - 1) / columns
+        return CGSize(width: width, height: CGFloat(rows) * card.height + CGFloat(rows - 1) * spacing)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let card = cardSize(width: bounds.width, subviews: subviews)
+        for (index, subview) in subviews.enumerated() {
+            subview.place(at: CGPoint(x: bounds.minX + CGFloat(index % columns) * (card.width + spacing),
+                                     y: bounds.minY + CGFloat(index / columns) * (card.height + spacing)),
+                          anchor: .topLeading, proposal: ProposedViewSize(card))
         }
     }
 }
@@ -150,27 +181,28 @@ private struct HueSceneCard: View {
                                  blue: $0.blue * 0.65 + base * 0.35) } ?? .secondary
     }
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        HStack(alignment: .top, spacing: 8) {
             ScenePaletteThumbnail(colors: scene.colors)
-                .frame(height: 30)
-                .overlay(alignment: .trailing) {
+                .frame(width: 24, height: 24)
+                .overlay {
                     if pending || scene.isActive {
                         ZStack {
                             Circle().fill(.black.opacity(0.6))
                             if pending { ProgressView().controlSize(.mini).tint(.white) }
                             else { Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)).foregroundStyle(.white) }
-                        }.frame(width: 20, height: 20).padding(5)
+                        }.frame(width: 20, height: 20)
                     }
                 }
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(scene.name).font(.system(size: 12, weight: .semibold))
-                    .lineLimit(2, reservesSpace: true)
+                    .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Text(scene.groupName).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
-            }
+            }.frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
         }
         .padding(10)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
         .background {
             RoundedRectangle(cornerRadius: 11)
                 .fill(colorScheme == .dark ? Color.white.opacity(0.045) : Color.white.opacity(0.52))
@@ -193,8 +225,8 @@ private struct ScenePaletteThumbnail: View {
                 LinearGradient(colors: [.white.opacity(0.18), .clear, .black.opacity(0.10)],
                                startPoint: .topLeading, endPoint: .bottomTrailing)
             }
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(.primary.opacity(0.08), lineWidth: 0.5) }
+            .clipShape(Circle())
+            .overlay { Circle().strokeBorder(.primary.opacity(0.08), lineWidth: 0.5) }
     }
 }
 

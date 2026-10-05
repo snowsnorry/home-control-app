@@ -81,3 +81,21 @@ Scoped result: passed. The native NSPopover keeps its 480 pt width. Its initial/
 The selected height lives in PanelPresentation across popover openings for this app session. It is clamped when content or display bounds change, preventing empty space. Double-clicking the grip expands to the maximum. The focused grip supports Up/Down in 20 pt steps and Home/End; a synthetic native Slider accessibility representation exposes the same height with Increment/Decrement actions. New labels/help are in the English string catalog.
 
 Validation: Xcode Debug build and all 56 XCTest tests pass in the existing local harness. Four new sizing tests cover the unchanged default/minimum, full-content maximum, smaller content, display caps and retained preference after brightness dismissal. Native dark-theme dragging changed height from 700 to 780 pt; double-click expanded the extended palette fixture to 809 pt and removed the scroll bar, showing the complete purifier card. An upward drag clamped at 700 pt; Down increased it to 720 pt. Light-theme accessibility Increment also increased 700 to 720 pt, and double-click expanded to the same complete 809 pt layout. Opening brightness after resizing and pressing Escape closed brightness while keeping the main panel at 809 pt. Observation after the second Escape timed out, so that closure is not asserted from capture. A many-device fixture expanded to the display cap of 1370 pt, retained scrolling, and successfully scrolled to its end. A shorter standard fixture showed all content with no height control or scroll bar. No physical-device commands were used in these checks.
+
+
+## Compact scene cards
+
+Scoped final result: blocked (native visual capture unavailable).
+
+The user's scene screenshot and requested changes define this scoped update: replace the landscape palette strip with a 24 pt circle beside the title, allow the title to wrap without truncation, and move the room caption directly below it with 2 pt spacing. The existing palette order, card tint, outline, active checkmark, pending indicator and scene activation remain in the same component. Single-line cards use a 32 pt text area plus 20 pt total vertical padding rather than reserving a two-line title below a separate palette strip.
+
+Validation: Xcode Debug build succeeded and source whitespace checks passed. The extended synthetic scene preview was launched in light appearance. Three native capture attempts returned timeoutReached, so rendered wrapping, light/dark appearance and activation visuals are unverified for this update. No physical-device commands were issued.
+
+
+## Equal scene card heights
+
+Scoped final result: blocked (native visual capture unavailable).
+
+The user's follow-up screenshot confirms the compact circle/title layout and shows unequal card heights when a title wraps. A custom three-column SwiftUI Layout now measures every scene at the actual column width and proposes the largest natural card height to all cells, including subsequent rows. Card backgrounds fill that height, with content aligned to the top. The layout recomputes from the current titles and available width without retaining a stale maximum.
+
+Validation: Xcode Debug build succeeded and source whitespace checks passed. Native inspection returned timeoutReached, so the rendered equal-height layout remains unverified.
