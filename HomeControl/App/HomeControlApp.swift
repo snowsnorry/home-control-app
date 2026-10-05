@@ -71,7 +71,7 @@ import Network
         }
         escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.keyCode == 53, self?.popover.isShown == true {
-                if self?.presentation.closeBrightness() != true { self?.popover.performClose(nil) }
+                if self?.presentation.closeDetailPopover() != true { self?.popover.performClose(nil) }
                 return nil
             }
             return event
@@ -133,7 +133,10 @@ import Network
             self.popover.animates = animates
         }, openSettings: { [weak self] in self?.showSettings($0) })
     }
-    func popoverDidClose(_ notification: Notification) { presentation.selectedLight = nil }
+    func popoverDidClose(_ notification: Notification) {
+        presentation.selectedLight = nil
+        presentation.showsPollutants = false
+    }
     @objc private func openSettings() { showSettings(nil) }
     private func showSettings(_ kind: DeviceKind?) {
         popover.performClose(nil)

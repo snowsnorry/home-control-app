@@ -17,7 +17,10 @@ struct HueLightCard: View {
         ZStack(alignment: .bottomTrailing) {
             Group {
                 if light.supportsBrightness {
-                    Button { presentation.selectedLight = .init(id: light.id) } label: { cardLabel }
+                    Button {
+                        presentation.showsPollutants = false
+                        presentation.selectedLight = .init(id: light.id)
+                    } label: { cardLabel }
                         .buttonStyle(.plain).disabled(!enabled)
                         .accessibilityLabel(Text("Adjust brightness for \(light.name)"))
                         .accessibilityValue(Text("\(Int(light.brightness ?? 0))%"))

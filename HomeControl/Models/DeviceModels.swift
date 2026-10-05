@@ -149,6 +149,10 @@ enum DysonPollutant: CaseIterable, Sendable {
         case .nitrogenDioxide: snapshot.nitrogenDioxide
         }
     }
+    func quality(for value: Double) -> AirQuality? {
+        guard value.isFinite, value >= 0 else { return nil }
+        return AirQuality(rawValue: boundaries.filter { value >= $0 }.count)
+    }
     // Compare unlike units on the existing quality scale. Within a band,
     // interpolate toward the next boundary; above the last, extend its interval.
     func severity(for value: Double) -> Double {
@@ -164,7 +168,7 @@ struct DysonPollutantReading {
     var reading: SensorReading
     var severity: Double
     var quality: AirQuality {
-        AirQuality(rawValue: pollutant.boundaries.filter { reading.value! >= $0 }.count)!
+        pollutant.quality(for: reading.value!)!
     }
 }
 struct DysonSnapshot: Equatable, Sendable {

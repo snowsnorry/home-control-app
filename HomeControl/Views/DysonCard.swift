@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DysonCard: View {
     var store: HomeStore
+    @Bindable var presentation: PanelPresentation
     @Environment(\.colorScheme) private var colorScheme
     private var enabled: Bool { store.dysonState == .online && !store.dysonPending }
     private var quality: AirQuality? { store.dyson.airQuality(at: store.now, connected: store.dysonState == .online) }
@@ -43,7 +44,18 @@ struct DysonCard: View {
                         Divider().frame(height: 44)
                         SensorMetric(title: "Humidity", symbol: "humidity", reading: store.dyson.humidity, unit: "%", fraction: 0, connected: store.dysonState == .online, now: store.now)
                         Divider().frame(height: 44)
-                        SensorMetric(title: LocalizedStringKey(dominantPollutant?.pollutant.title ?? "PM2.5"), symbol: (dominantPollutant?.pollutant ?? .pm25).symbol, reading: dominantPollutant?.reading, unit: dominantPollutant?.pollutant.unit ?? "µg/m³", fraction: dominantPollutant?.pollutant.fraction ?? 0, connected: store.dysonState == .online, now: store.now)
+                        Button {
+                            presentation.selectedLight = nil
+                            presentation.showsPollutants.toggle()
+                        } label: {
+                            SensorMetric(title: LocalizedStringKey(dominantPollutant?.pollutant.title ?? "PM2.5"), symbol: (dominantPollutant?.pollutant ?? .pm25).symbol, reading: dominantPollutant?.reading, unit: dominantPollutant?.pollutant.unit ?? "µg/m³", fraction: dominantPollutant?.pollutant.fraction ?? 0, connected: store.dysonState == .online, now: store.now)
+                                .contentShape(Rectangle())
+                        }.buttonStyle(.plain)
+                            .help("Show all pollutants")
+                            .accessibilityHint("Show all pollutants")
+                            .popover(isPresented: $presentation.showsPollutants, arrowEdge: .trailing) {
+                                DysonPollutantsPopover(snapshot: store.dyson, connected: store.dysonState == .online, now: store.now)
+                            }
                     }
                     Picker("Mode", selection: Binding(get: { store.dyson.autoMode }, set: { store.setDyson(["auto": $0 ? "ON" : "OFF"]) })) {
                         Text("Auto").tag(true)
@@ -75,6 +87,71 @@ struct DysonCard: View {
             let suffix = stale ? " · " + String(localized: "Last updated \(reading!.receivedAt.formatted(date: .omitted, time: .shortened))") : ""
             return label + ": " + formatted + (unit.isEmpty ? "" : " " + unit) + suffix
         }.joined(separator: "\n")
+    }
+}
+
+private struct DysonPollutantsPopover: View {
+    var snapshot: DysonSnapshot
+    var connected: Bool
+    var now: Date
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Pollutants").font(.headline)
+            ForEach(DysonPollutant.allCases, id: \.self) { pollutant in
+                DysonPollutantRow(pollutant: pollutant, reading: pollutant.reading(in: snapshot), connected: connected, now: now)
+            }
+        }
+        .padding(18)
+        .frame(width: 300)
+        .fixedSize(horizontal: false, vertical: true)
+        .onExitCommand { dismiss() }
+    }
+}
+
+private struct DysonPollutantRow: View {
+    var pollutant: DysonPollutant
+    var reading: SensorReading?
+    var connected: Bool
+    var now: Date
+    @Environment(\.colorScheme) private var colorScheme
+    private var quality: AirQuality? { reading?.value.flatMap { pollutant.quality(for: $0) } }
+    private var tint: Color {
+        switch quality {
+        case .good: .green
+        case .fair: .yellow
+        case .poor: .orange
+        case .veryPoor: .red
+        case nil: .secondary
+        }
+    }
+    private var background: Color {
+        guard let quality else { return Color.primary.opacity(0.04) }
+        return Color(rgb: colorScheme == .dark ? quality.darkBackground : quality.lightBackground)
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                Circle().fill(tint).frame(width: 8, height: 8).accessibilityHidden(true)
+                Label(pollutant.title, systemImage: pollutant.symbol).fontWeight(.medium)
+                Spacer(minLength: 8)
+                Text(quality == nil ? "—" : reading!.value!.formatted(.number.precision(.fractionLength(pollutant.fraction))))
+                    .monospacedDigit().fontWeight(.semibold)
+                if quality != nil, !pollutant.unit.isEmpty {
+                    Text(pollutant.unit).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if let reading, quality != nil, !connected || !reading.isFresh(at: now) {
+                Text("Last updated \(reading.receivedAt.formatted(date: .omitted, time: .shortened))")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .padding(10)
+        .background(background, in: RoundedRectangle(cornerRadius: 10))
+        .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(tint.opacity(0.35), lineWidth: 0.75) }
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(quality?.title ?? String(localized: "Air quality unavailable"))
     }
 }
 

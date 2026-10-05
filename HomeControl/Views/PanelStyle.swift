@@ -5,7 +5,15 @@ import Observation
 @MainActor @Observable final class PanelPresentation {
     struct LightSelection: Identifiable { let id: String }
     var selectedLight: LightSelection?
+    var showsPollutants = false
     var preferredPanelHeight: CGFloat?
+    func closeDetailPopover() -> Bool {
+        if showsPollutants {
+            showsPollutants = false
+            return true
+        }
+        return closeBrightness()
+    }
     func closeBrightness() -> Bool {
         guard selectedLight != nil else { return false }
         selectedLight = nil

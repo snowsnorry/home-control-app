@@ -25,7 +25,7 @@ struct DevicePanel: View {
                             Text("Dyson TP07").font(.headline)
                             placeholder("Connect your Dyson TP07 to monitor and control the air purifier.", kind: .dyson)
                         }
-                    } else { DysonCard(store: store) }
+                    } else { DysonCard(store: store, presentation: presentation) }
                 }.padding(20)
                     .onGeometryChange(for: CGFloat.self) { ceil($0.size.height) } action: { contentHeight = $0 }
             }.scrollBounceBehavior(.basedOnSize)

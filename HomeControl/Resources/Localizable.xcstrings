@@ -1057,6 +1057,17 @@
         }
       }
     },
+    "Pollutants": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pollutants"
+          }
+        }
+      }
+    },
     "Poor air quality": {
       "extractionState": "manual",
       "localizations": {
@@ -1361,6 +1372,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "Show %@ in %@ in the panel"
+          }
+        }
+      }
+    },
+    "Show all pollutants": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show all pollutants"
           }
         }
       }

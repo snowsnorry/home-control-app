@@ -440,6 +440,18 @@ final class AirQualityTests: XCTestCase {
             }
         }
     }
+    func testIndividualPollutantQuality() {
+        for pollutant in DysonPollutant.allCases {
+            XCTAssertEqual(pollutant.quality(for: 0), .good)
+            for (index, boundary) in pollutant.boundaries.enumerated() {
+                XCTAssertEqual(pollutant.quality(for: boundary - 0.01)?.rawValue, index)
+                XCTAssertEqual(pollutant.quality(for: boundary)?.rawValue, index + 1)
+            }
+            for invalid in [-1.0, .nan, .infinity] {
+                XCTAssertNil(pollutant.quality(for: invalid))
+            }
+        }
+    }
     func testWorstFreshReadingAndOfflineNeutral() {
         var snapshot = DysonSnapshot()
         snapshot.pm25 = SensorReading(value: 2, receivedAt: now)
@@ -621,6 +633,13 @@ final class AirQualityTests: XCTestCase {
         XCTAssertFalse(presentation.closeBrightness())
         presentation.selectedLight = .init(id: "lamp")
         XCTAssertTrue(presentation.closeBrightness()); XCTAssertNil(presentation.selectedLight)
+        XCTAssertFalse(presentation.closeDetailPopover())
+        presentation.showsPollutants = true
+        XCTAssertTrue(presentation.closeDetailPopover())
+        XCTAssertFalse(presentation.showsPollutants)
+        presentation.selectedLight = .init(id: "lamp")
+        XCTAssertTrue(presentation.closeDetailPopover()); XCTAssertNil(presentation.selectedLight)
+        XCTAssertFalse(presentation.closeDetailPopover())
         for archetype in ["table_shade", "floor_shade", "ceiling_round", "hue_lightstrip", "plug", "spot_bulb", "unknown"] {
             for on in [true, false] {
                 XCTAssertNotNil(NSImage(systemSymbolName: HueIcon.symbol(archetype: archetype, on: on), accessibilityDescription: nil), archetype)
