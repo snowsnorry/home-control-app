@@ -143,12 +143,15 @@ final class HueTrustDelegate: NSObject, URLSessionDelegate, URLSessionTaskDelega
             let device = byID[owner] ?? [:]
             let metadata = device["metadata"] as? [String: Any] ?? [:]
             let product = device["product_data"] as? [String: Any] ?? [:]
-            let name = (r["metadata"] as? [String: Any])?["name"] as? String ?? metadata["name"] as? String ?? String(localized: "Hue light")
-            let preferredArchetype = metadata["archetype"] as? String
-            let archetype = preferredArchetype.flatMap { $0 == "unknown_archetype" ? nil : $0 } ?? product["product_archetype"] as? String ?? "unknown_archetype"
+            let lightMetadata = r["metadata"] as? [String: Any] ?? [:]
+            let name = lightMetadata["name"] as? String ?? metadata["name"] as? String ?? String(localized: "Hue light")
+            let archetype = [lightMetadata["archetype"], metadata["archetype"], product["product_archetype"]]
+                .compactMap { $0 as? String }.first { $0 != "unknown_archetype" } ?? "unknown_archetype"
             return HueLight(id: id, name: name, isOn: (r["on"] as? [String: Any])?["on"] as? Bool ?? false,
                             brightness: (r["dimming"] as? [String: Any])?["brightness"] as? Double,
-                            reachable: connectivity[owner] ?? true, archetype: archetype)
+                            reachable: connectivity[owner] ?? true, archetype: archetype,
+                            colorXY: parseXY(r), mirek: (r["color_temperature"] as? [String: Any])?["mirek"] as? Double,
+                            effect: (r["effects"] as? [String: Any])?["status"] as? String)
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         let scenes = resources.compactMap { r -> HueScene? in
             guard r["type"] as? String == "scene", let id = r["id"] as? String,
@@ -157,7 +160,15 @@ final class HueTrustDelegate: NSObject, URLSessionDelegate, URLSessionTaskDelega
             let groupName = (byID[groupID]?["metadata"] as? [String: Any])?["name"] as? String ?? String(localized: "Other scenes")
             return HueScene(id: id, name: name, groupID: groupID, groupName: groupName,
                             active: (r["status"] as? [String: Any])?["active"] as? String,
-                            colors: sceneColors(r))
+                            colors: sceneColors(r), actions: (r["actions"] as? [[String: Any]] ?? []).compactMap { entry in
+                                guard let target = entry["target"] as? [String: Any], target["rtype"] as? String == "light",
+                                      let id = target["rid"] as? String, let action = entry["action"] as? [String: Any] else { return nil }
+                                return HueSceneAction(lightID: id, on: (action["on"] as? [String: Any])?["on"] as? Bool,
+                                                      brightness: (action["dimming"] as? [String: Any])?["brightness"] as? Double,
+                                                      colorXY: parseXY(action), mirek: (action["color_temperature"] as? [String: Any])?["mirek"] as? Double,
+                                                      effect: (action["effects"] as? [String: Any])?["effect"] as? String,
+                                                      supportsMatching: Set(action.keys).isSubset(of: ["on", "dimming", "color", "color_temperature", "effects", "dynamics"]))
+                            })
         }.sorted {
             let groupOrder = $0.groupName.localizedStandardCompare($1.groupName)
             if groupOrder != .orderedSame { return groupOrder == .orderedAscending }
@@ -165,6 +176,11 @@ final class HueTrustDelegate: NSObject, URLSessionDelegate, URLSessionTaskDelega
             return nameOrder == .orderedSame ? $0.id < $1.id : nameOrder == .orderedAscending
         }
         return HueBridgeSnapshot(lights: lights, scenes: scenes)
+    }
+    private static func parseXY(_ resource: [String: Any]) -> HueXY? {
+        guard let xy = (resource["color"] as? [String: Any])?["xy"] as? [String: Any],
+              let x = xy["x"] as? Double, let y = xy["y"] as? Double else { return nil }
+        return HueXY(x: x, y: y)
     }
     private static func sceneColors(_ resource: [String: Any]) -> [HueSceneColor] {
         func color(_ entry: [String: Any]) -> HueSceneColor? {

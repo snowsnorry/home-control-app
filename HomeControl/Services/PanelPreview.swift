@@ -33,7 +33,8 @@ import Foundation
 }
 
 @MainActor private final class PreviewHue: HueClientProtocol {
-    var snapshot = HueBridgeSnapshot(lights: [
+    var snapshot: HueBridgeSnapshot = {
+        var snapshot = HueBridgeSnapshot(lights: [
         HueLight(id: "00000000-0000-4000-8000-000000000001", name: "Hue Lamp 2", isOn: true, brightness: 37, reachable: true, archetype: "table_shade"),
         HueLight(id: "00000000-0000-4000-8000-000000000002", name: "Hue Lamp 3", isOn: true, brightness: 60, reachable: true, archetype: "floor_shade"),
         HueLight(id: "00000000-0000-4000-8000-000000000003", name: "Hue Smart plug 1", isOn: true, brightness: nil, reachable: true, archetype: "plug"),
@@ -42,7 +43,16 @@ import Foundation
         HueScene(id: "00000000-0000-4000-8000-000000000011", name: "Arctic aurora", groupID: "room1", groupName: "Living room", active: "inactive", colors: [.xy(x: 0.19, y: 0.24)!, .xy(x: 0.21, y: 0.38)!, .xy(x: 0.27, y: 0.14)!]),
         HueScene(id: "00000000-0000-4000-8000-000000000012", name: "Spring blossom", groupID: "room1", groupName: "Living room", active: "inactive", colors: [.xy(x: 0.45, y: 0.24)!, .xy(x: 0.51, y: 0.31)!, .xy(x: 0.34, y: 0.22)!]),
         HueScene(id: "00000000-0000-4000-8000-000000000013", name: "Evening", groupID: "room1", groupName: "Living room", active: "static", colors: [.xy(x: 0.57, y: 0.4)!, .xy(x: 0.64, y: 0.33)!, .xy(x: 0.41, y: 0.2)!])
-    ])
+        ])
+        for index in snapshot.scenes.indices {
+            snapshot.scenes[index].actions = [
+                HueSceneAction(lightID: snapshot.lights[0].id, on: true, brightness: [20.0, 85, 37][index]),
+                HueSceneAction(lightID: snapshot.lights[1].id, on: true, brightness: [35.0, 85, 60][index]),
+                HueSceneAction(lightID: snapshot.lights[2].id, on: true)
+            ]
+        }
+        return snapshot
+    }()
     func identify(host: String, bridgeID: String?) async throws -> HueConfiguration { throw ControlError.offline }
     func pair(configuration: HueConfiguration) async throws -> String { throw ControlError.offline }
     func fetchSnapshot(configuration: HueConfiguration, key: String) async throws -> HueBridgeSnapshot { snapshot }
@@ -53,7 +63,12 @@ import Foundation
     }
     func recallScene(configuration: HueConfiguration, key: String, id: String) async throws {
         for index in snapshot.scenes.indices { snapshot.scenes[index].active = snapshot.scenes[index].id == id ? "static" : "inactive" }
-        for index in snapshot.lights.indices where snapshot.lights[index].supportsBrightness { snapshot.lights[index].isOn = true }
+        guard let scene = snapshot.scenes.first(where: { $0.id == id }) else { return }
+        for action in scene.actions {
+            guard let index = snapshot.lights.firstIndex(where: { $0.id == action.lightID }) else { continue }
+            if let on = action.on { snapshot.lights[index].isOn = on }
+            if let brightness = action.brightness { snapshot.lights[index].brightness = brightness }
+        }
     }
 }
 @MainActor private final class PreviewDyson: DysonClientProtocol {

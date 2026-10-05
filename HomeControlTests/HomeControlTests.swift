@@ -113,6 +113,7 @@ final class CodecTests: XCTestCase {
     var commands = 0
     var rejectPair = false
     var confirmLights = false
+    var lightCommandIDs: [String] = []
     var delayRecall = false
     var rejectRecall = false
     private var recallContinuation: CheckedContinuation<Void, Never>?
@@ -129,6 +130,7 @@ final class CodecTests: XCTestCase {
     }
     func setLight(configuration: HueConfiguration, key: String, id: String, on: Bool?, brightness: Double?) async throws {
         commands += 1
+        lightCommandIDs.append(id)
         if confirmLights, let index = lights.firstIndex(where: { $0.id == id }) {
             if let on { lights[index].isOn = on }; if let brightness { lights[index].brightness = brightness }
         }
@@ -723,5 +725,187 @@ final class AirQualityTests: XCTestCase {
         XCTAssertEqual(fewerDevices.height(preferred: presentation.preferredPanelHeight), 792)
         let smallerScreen = PanelHeightLimits(contentHeight: 920, availableHeight: 740)
         XCTAssertEqual(smallerScreen.height(preferred: presentation.preferredPanelHeight), 740)
+    }
+}
+
+@MainActor final class SceneMatchingTests: XCTestCase {
+    private func scene() -> HueScene {
+        HueScene(id: "scene", name: "Evening", groupID: "room", groupName: "Living", active: "inactive", actions: [
+            HueSceneAction(lightID: "lamp", on: true, brightness: 75, colorXY: HueXY(x: 0.4, y: 0.3)),
+            HueSceneAction(lightID: "lamp-plug", on: true),
+            HueSceneAction(lightID: "off-lamp", on: false, brightness: 50)
+        ])
+    }
+    private func lights() -> [HueLight] {
+        [HueLight(id: "lamp", name: "Lamp", isOn: true, brightness: 75, reachable: true, colorXY: HueXY(x: 0.4, y: 0.3)),
+         HueLight(id: "lamp-plug", name: "Lamp plug", isOn: true, brightness: nil, reachable: true, archetype: "plug"),
+         HueLight(id: "off-lamp", name: "Off lamp", isOn: false, brightness: 10, reachable: true),
+         HueLight(id: "other-plug", name: "Other device", isOn: true, brightness: nil, reachable: true, archetype: "plug")]
+    }
+    func testMatchesAllSceneDevicesAndIgnoresOutsidePlug() {
+        var lights = lights()
+        XCTAssertTrue(scene().matches(lights))
+        lights[3].isOn = false
+        XCTAssertTrue(scene().matches(lights))
+        lights[1].isOn = false
+        XCTAssertFalse(scene().matches(lights))
+    }
+    func testOutsideLampBlocksActivityButOutsideApplianceDoesNot() {
+        var lights = lights()
+        XCTAssertTrue(scene().matches(lights))
+        lights.append(HueLight(id: "outside-lamp", name: "Another lamp", isOn: true, brightness: 50, reachable: true))
+        XCTAssertFalse(scene().matches(lights))
+        lights[4].isOn = false
+        XCTAssertTrue(scene().matches(lights))
+        lights[3].archetype = "wall_shade" // A Hue plug configured as a lamp.
+        XCTAssertFalse(scene().matches(lights))
+        lights[3].isOn = false
+        XCTAssertTrue(scene().matches(lights))
+    }
+    func testSmallBrightnessAndColorDifferencesMatchButSignificantChangesDoNot() {
+        var lights = lights()
+        lights[0].brightness = 72.1
+        lights[0].colorXY = HueXY(x: 0.406, y: 0.307)
+        XCTAssertTrue(scene().matches(lights))
+        lights[0].brightness = 71.9
+        XCTAssertFalse(scene().matches(lights))
+        lights[0].brightness = 75
+        lights[0].colorXY = HueXY(x: 0.408, y: 0.308)
+        XCTAssertFalse(scene().matches(lights))
+    }
+    func testCurrentEveningBrightnessMismatchIsNotCausedByOutsidePlug() {
+        var scene = self.scene()
+        scene.actions = [
+            HueSceneAction(lightID: "lamp", on: true, brightness: 75.1, colorXY: HueXY(x: 0.5608999, y: 0.4042)),
+            HueSceneAction(lightID: "lamp2", on: true, brightness: 75.1, colorXY: HueXY(x: 0.5608999, y: 0.4042)),
+            HueSceneAction(lightID: "lamp3", on: true, brightness: 75.1, colorXY: HueXY(x: 0.5608999, y: 0.4042)),
+            HueSceneAction(lightID: "lamp-plug", on: true)
+        ]
+        var lights = [
+            HueLight(id: "lamp", name: "Lamp 1", isOn: true, brightness: 75.1, reachable: true, colorXY: HueXY(x: 0.5608, y: 0.4039)),
+            HueLight(id: "lamp2", name: "Lamp 2", isOn: true, brightness: 37.94, reachable: true, colorXY: HueXY(x: 0.5608, y: 0.4039)),
+            HueLight(id: "lamp3", name: "Lamp 3", isOn: true, brightness: 60.08, reachable: true, colorXY: HueXY(x: 0.5608, y: 0.4039)),
+            HueLight(id: "lamp-plug", name: "Lamp plug", isOn: true, brightness: nil, reachable: true, archetype: "wall_shade"),
+            HueLight(id: "other-plug", name: "Appliance", isOn: true, brightness: nil, reachable: true, archetype: "plug")
+        ]
+        XCTAssertFalse(scene.matches(lights))
+        lights[1].brightness = 73; lights[2].brightness = 77
+        XCTAssertTrue(scene.matches(lights))
+        lights[4].isOn = false
+        XCTAssertTrue(scene.matches(lights))
+        lights[3].isOn = false
+        XCTAssertFalse(scene.matches(lights))
+    }
+    func testConfiguredLightIconOverridesPlugProductType() throws {
+        let data = Data(#"{"errors":[],"data":[{"id":"device","type":"device","metadata":{"archetype":"plug"},"product_data":{"product_archetype":"plug"}},{"id":"lamp-plug","type":"light","owner":{"rid":"device"},"metadata":{"archetype":"wall_shade"},"on":{"on":true}},{"id":"appliance","type":"light","owner":{"rid":"device"},"metadata":{"archetype":"plug"},"on":{"on":true}}]}"#.utf8)
+        let lights = try HueClient.parseResources(data)
+        XCTAssertTrue(try XCTUnwrap(lights.first { $0.id == "lamp-plug" }).isLightingDevice)
+        XCTAssertFalse(try XCTUnwrap(lights.first { $0.id == "appliance" }).isLightingDevice)
+    }
+    func testBrightnessColorPowerAndReachabilityMustMatch() {
+        var lights = lights()
+        lights[0].brightness = 75.5
+        lights[0].colorXY = HueXY(x: 0.401, y: 0.299)
+        XCTAssertTrue(scene().matches(lights))
+        lights[0].brightness = 60
+        XCTAssertFalse(scene().matches(lights))
+        lights = self.lights(); lights[0].colorXY = HueXY(x: 0.5, y: 0.3)
+        XCTAssertFalse(scene().matches(lights))
+        lights = self.lights(); lights[2].isOn = true
+        XCTAssertFalse(scene().matches(lights))
+        lights = self.lights(); lights[1].reachable = false
+        XCTAssertFalse(scene().matches(lights))
+        XCTAssertFalse(scene().matches(Array(self.lights().prefix(1))))
+    }
+    func testTemperatureModeAndAllOffScenes() {
+        var scene = HueScene(id: "s", name: "Warm", groupID: "r", groupName: "Room", actions: [HueSceneAction(lightID: "l", on: true, mirek: 400)])
+        var light = HueLight(id: "l", name: "Light", isOn: true, brightness: 50, reachable: true, mirek: 401)
+        XCTAssertTrue(scene.matches([light]))
+        light.mirek = nil
+        XCTAssertFalse(scene.matches([light]))
+        scene.actions[0].on = false; light.isOn = false
+        XCTAssertFalse(scene.matches([light]))
+    }
+    func testParserPreservesSceneTargetsAndCurrentColors() throws {
+        let data = Data(#"{"errors":[],"data":[{"id":"lamp","type":"light","on":{"on":true},"dimming":{"brightness":75},"color":{"xy":{"x":0.4,"y":0.3}},"color_temperature":{"mirek":null}},{"id":"s","type":"scene","metadata":{"name":"Evening"},"group":{"rid":"r"},"actions":[{"target":{"rid":"lamp","rtype":"light"},"action":{"on":{"on":true},"dimming":{"brightness":75},"color":{"xy":{"x":0.4,"y":0.3}}}},{"target":{"rid":"plug","rtype":"light"},"action":{"on":{"on":true}}}]}]}"#.utf8)
+        let snapshot = try HueClient.parseSnapshot(data)
+        XCTAssertEqual(snapshot.scenes[0].enabledLightIDs, ["lamp", "plug"])
+        XCTAssertEqual(snapshot.scenes[0].actions[0].colorXY, snapshot.lights[0].colorXY)
+        XCTAssertEqual(snapshot.scenes[0].actions[0].brightness, 75)
+    }
+    func testActiveClickTurnsOffOnlyEnabledSceneMembers() async throws {
+        let hue = FakeHue(); hue.confirmLights = true
+        hue.lights = lights(); hue.scenes = [scene()]
+        let store = HomeStore(hue: hue, dyson: FakeDyson(), secrets: MemorySecrets(), persistence: MemoryConfiguration(), clock: FakeClock())
+        try await store.connectHue(HueConfiguration(host: "hue.local", bridgeID: "bridge"))
+        for _ in 0..<20 { await Task.yield() }
+        store.setSceneVisible("scene", visible: true)
+        XCTAssertTrue(store.visibleScenes[0].isActive)
+        // Pass the original scene with an inactive bridge status; use the store's current state.
+        store.recallScene(scene())
+        XCTAssertEqual(store.pendingSceneID, "scene")
+        for _ in 0..<80 { await Task.yield() }
+        XCTAssertEqual(Set(hue.lightCommandIDs), ["lamp", "lamp-plug"])
+        XCTAssertEqual(hue.commands, 2)
+        XCTAssertFalse(store.visibleScenes[0].isActive)
+        XCTAssertTrue(try XCTUnwrap(store.lights.first { $0.id == "other-plug" }).isOn)
+        XCTAssertNil(store.pendingSceneID); XCTAssertNil(store.hueError)
+        store.stop()
+    }
+    func testActiveSceneWithoutTargetsDoesNotRecallOrSendPowerCommands() async throws {
+        let hue = FakeHue()
+        hue.scenes = [HueScene(id: "scene", name: "Evening", groupID: "room", groupName: "Living", active: "static")]
+        hue.lights = lights()
+        let store = HomeStore(hue: hue, dyson: FakeDyson(), secrets: MemorySecrets(), persistence: MemoryConfiguration(), clock: FakeClock())
+        try await store.connectHue(HueConfiguration(host: "hue.local", bridgeID: "bridge"))
+        for _ in 0..<20 { await Task.yield() }
+        store.setSceneVisible("scene", visible: true)
+        store.recallScene(store.visibleScenes[0])
+        for _ in 0..<40 { await Task.yield() }
+        XCTAssertEqual(hue.commands, 0)
+        XCTAssertTrue(hue.lightCommandIDs.isEmpty)
+        XCTAssertNotNil(store.hueError)
+        XCTAssertNil(store.pendingSceneID)
+        XCTAssertTrue(hue.lights.first { $0.id == "other-plug" }!.isOn)
+        store.stop()
+    }
+    func testLightOffRequestTargetsOneResourceAndHasNoGroupCommand() async throws {
+        let id = "00000000-0000-4000-8000-000000000003"
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let client = HueClient(sessionConfiguration: configuration)
+        StubURLProtocol.install { request in
+            XCTAssertEqual(request.httpMethod, "PUT")
+            XCTAssertEqual(request.url?.path, "/clip/v2/resource/light/" + id)
+            var bytes = request.httpBody ?? Data()
+            if bytes.isEmpty, let stream = request.httpBodyStream {
+                stream.open(); defer { stream.close() }
+                var buffer = [UInt8](repeating: 0, count: 1024)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }
+                    bytes.append(contentsOf: buffer.prefix(count))
+                }
+            }
+            let body = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any]
+            XCTAssertEqual(Set(body?.keys.map { $0 } ?? []), ["on"])
+            XCTAssertEqual((body?["on"] as? [String: Bool])?["on"], false)
+            return (200, Data(#"{"errors":[],"data":[]}"#.utf8))
+        }
+        try await client.setLight(configuration: HueConfiguration(host: "hue.local", bridgeID: "001788fffe123456"), key: "test-key", id: id, on: false, brightness: nil)
+    }
+    func testManualChangeOverridesStaleBridgeActivity() async throws {
+        let hue = FakeHue(); hue.lights = lights(); hue.lights[0].brightness = 30
+        var scene = scene(); scene.active = "static"; hue.scenes = [scene]
+        let store = HomeStore(hue: hue, dyson: FakeDyson(), secrets: MemorySecrets(), persistence: MemoryConfiguration(), clock: FakeClock())
+        try await store.connectHue(HueConfiguration(host: "hue.local", bridgeID: "bridge"))
+        for _ in 0..<20 { await Task.yield() }
+        store.setSceneVisible("scene", visible: true)
+        XCTAssertFalse(store.visibleScenes[0].isActive)
+        store.recallScene(scene)
+        for _ in 0..<40 { await Task.yield() }
+        XCTAssertEqual(hue.commands, 1)
+        XCTAssertTrue(hue.lightCommandIDs.isEmpty)
+        store.stop()
     }
 }

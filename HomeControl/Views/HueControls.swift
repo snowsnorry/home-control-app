@@ -127,7 +127,9 @@ struct HueScenesView: View {
                     }.buttonStyle(.plain)
                         .disabled(store.hueState != .online || store.pendingSceneID != nil || !store.pendingLights.isEmpty)
                         .help(scene.name + " · " + scene.groupName)
-                        .accessibilityLabel(Text("Activate \(scene.name) in \(scene.groupName)"))
+                        .accessibilityLabel(scene.isActive && !scene.enabledLightIDs.isEmpty
+                                            ? Text("Turn off \(scene.name) in \(scene.groupName)")
+                                            : Text("Activate \(scene.name) in \(scene.groupName)"))
                         .accessibilityValue(store.pendingSceneID == scene.id ? Text("Waiting for device confirmation")
                                             : scene.isActive ? Text("Active") : Text("Inactive"))
                 }

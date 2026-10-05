@@ -1584,6 +1584,28 @@
           }
         }
       }
+    },
+    "Turn off %@ in %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turn off %@ in %@"
+          }
+        }
+      }
+    },
+    "The scene has no explicit lights to turn off.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The scene has no explicit lights to turn off."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

@@ -13,7 +13,49 @@ struct SavedConfiguration: Codable { var hue: HueConfiguration?; var dyson: Dyso
 struct HueLight: Identifiable, Equatable, Sendable {
     var id: String; var name: String; var isOn: Bool; var brightness: Double?; var reachable: Bool
     var archetype: String = "unknown_archetype"
+    var colorXY: HueXY?
+    var mirek: Double?
+    var effect: String?
     var supportsBrightness: Bool { brightness != nil }
+    // Hue's configured icon distinguishes a lamp on a plug from an unrelated appliance.
+    var isLightingDevice: Bool { supportsBrightness || archetype != "plug" }
+}
+
+struct HueXY: Equatable, Sendable {
+    var x: Double
+    var y: Double
+}
+
+struct HueSceneAction: Equatable, Sendable {
+    static let brightnessTolerance = 3.0 // Percentage points on Hue's 0...100 scale.
+    static let colorTolerance = 0.01 // Distance in CIE xy coordinates.
+    static let temperatureTolerance = 5.0 // Mirek.
+    var lightID: String
+    var on: Bool?
+    var brightness: Double?
+    var colorXY: HueXY?
+    var mirek: Double?
+    var effect: String?
+    var supportsMatching: Bool = true
+
+    func matches(_ light: HueLight, dynamic: Bool) -> Bool {
+        guard light.reachable, on == nil || light.isOn == on else { return false }
+        // Off lamps retain their previous brightness and color on the bridge.
+        if on == false || dynamic { return true }
+        guard supportsMatching else { return false }
+        if let effect, light.effect != effect { return false }
+        if let brightness {
+            guard let actual = light.brightness, abs(actual - brightness) <= Self.brightnessTolerance else { return false }
+        }
+        if let colorXY {
+            guard light.mirek == nil, let actual = light.colorXY,
+                  hypot(actual.x - colorXY.x, actual.y - colorXY.y) <= Self.colorTolerance else { return false }
+        }
+        if let mirek {
+            guard let actual = light.mirek, abs(actual - mirek) <= Self.temperatureTolerance else { return false }
+        }
+        return true
+    }
 }
 struct HueScene: Identifiable, Equatable, Sendable {
     var id: String
@@ -22,9 +64,23 @@ struct HueScene: Identifiable, Equatable, Sendable {
     var groupName: String
     var active: String?
     var colors: [HueSceneColor] = []
+    var actions: [HueSceneAction] = []
+    var matchesLights: Bool?
     // Hue supplies an ordered palette, with no separate dominant-color field.
     var primaryColor: HueSceneColor? { colors.first }
-    var isActive: Bool { active == "static" || active == "dynamic_palette" }
+    var isActive: Bool { matchesLights ?? (active == "static" || active == "dynamic_palette") }
+    var enabledLightIDs: Set<String> { Set(actions.filter { $0.on == true }.map(\.lightID)) }
+
+    func matches(_ lights: [HueLight]) -> Bool {
+        guard !enabledLightIDs.isEmpty else { return false }
+        let memberIDs = Set(actions.map(\.lightID))
+        guard !lights.contains(where: { $0.isOn && $0.isLightingDevice && !memberIDs.contains($0.id) }) else { return false }
+        let byID = Dictionary(lights.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return actions.allSatisfy { action in
+            guard let light = byID[action.lightID] else { return false }
+            return action.matches(light, dynamic: active == "dynamic_palette")
+        }
+    }
 }
 
 /// Display colors are normalized independently of lamp brightness, so dim scenes remain recognizable.

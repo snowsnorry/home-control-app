@@ -63,7 +63,14 @@ import Observation
         do { try persistence.save(updated); configuration = updated; storageError = nil }
         catch { storageError = error.localizedDescription }
     }
-    private func applyHue(_ snapshot: HueBridgeSnapshot) { lights = snapshot.lights; scenes = snapshot.scenes }
+    private func applyHue(_ snapshot: HueBridgeSnapshot) {
+        lights = snapshot.lights
+        scenes = snapshot.scenes.map { scene in
+            var scene = scene
+            if !scene.actions.isEmpty { scene.matchesLights = scene.matches(lights) }
+            return scene
+        }
+    }
     private func refreshHue(_ config: HueConfiguration, key: String, generation: UUID) async throws {
         let snapshot = try await hue.fetchSnapshot(configuration: config, key: key)
         try Task.checkCancellation()
@@ -247,8 +254,15 @@ import Observation
     }
     func recallScene(_ scene: HueScene) {
         guard hueState == .online, pendingSceneID == nil, pendingLights.isEmpty,
-              scenes.contains(where: { $0.id == scene.id }),
+              let currentScene = scenes.first(where: { $0.id == scene.id }),
               visibleScenes.contains(where: { $0.id == scene.id }), let config = configuration.hue else { return }
+        let turningOff = currentScene.isActive
+        let offIDs = currentScene.enabledLightIDs.sorted()
+        // An active scene without explicit targets must never fall back to scene recall.
+        if turningOff && offIDs.isEmpty {
+            hueError = String(localized: "The scene has no explicit lights to turn off.")
+            return
+        }
         pendingSceneID = scene.id; hueError = nil
         let generation = hueGeneration, taskID = UUID()
         hueCommandIDs.insert(taskID)
@@ -261,7 +275,22 @@ import Observation
             do {
                 guard let key = try self.secrets.read("hue") else { throw ControlError.authorization }
                 try await withCommandDeadline { [self] in
-                    try await self.hue.recallScene(configuration: config, key: key, id: scene.id)
+                    if !turningOff {
+                        try await self.hue.recallScene(configuration: config, key: key, id: scene.id)
+                    } else {
+                        for id in offIDs {
+                            try Task.checkCancellation()
+                            guard self.hueGeneration == generation, self.hueState == .online else { throw CancellationError() }
+                            try await self.hue.setLight(configuration: config, key: key, id: id, on: false, brightness: nil)
+                        }
+                        let deadline = self.clock.now.addingTimeInterval(10)
+                        while self.clock.now < deadline {
+                            try await self.refreshHue(config, key: key, generation: generation)
+                            if offIDs.allSatisfy({ id in self.lights.contains { $0.id == id && !$0.isOn } }) { return }
+                            try await self.clock.sleep(seconds: 0.4)
+                        }
+                        throw ControlError.timeout
+                    }
                     try Task.checkCancellation()
                     guard self.hueGeneration == generation, self.hueState == .online else { throw CancellationError() }
                     try await self.refreshHue(config, key: key, generation: generation)
