@@ -57,10 +57,11 @@ struct DysonCard: View {
                                 DysonPollutantsPopover(snapshot: store.dyson, connected: store.dysonState == .online, now: store.now)
                             }
                     }
-                    Picker("Mode", selection: Binding(get: { store.dyson.autoMode }, set: { store.setDyson(["auto": $0 ? "ON" : "OFF"]) })) {
-                        Text("Auto").tag(true)
-                        Text("Manual").tag(false)
-                    }.pickerStyle(.segmented).labelsHidden().disabled(!enabled).accessibilityLabel("Purifier mode")
+                    Toggle("Auto", isOn: Binding(get: { store.dyson.autoMode }, set: { store.setDyson(["auto": $0 ? "ON" : "OFF"]) }))
+                        .toggleStyle(DysonAutoToggleStyle())
+                        .disabled(!enabled)
+                        .accessibilityLabel("Purifier mode")
+                        .accessibilityValue(store.dyson.autoMode ? Text("Auto") : Text("Manual"))
                     DysonSpeedControl(speed: store.dyson.speed, autoMode: store.dyson.autoMode) { speed in
                         store.setDyson(["auto": "OFF", "fpwr": "ON", "fnsp": String(format: "%04d", speed)])
                     }.disabled(!enabled)
@@ -87,6 +88,39 @@ struct DysonCard: View {
             let suffix = stale ? " · " + String(localized: "Last updated \(reading!.receivedAt.formatted(date: .omitted, time: .shortened))") : ""
             return label + ": " + formatted + (unit.isEmpty ? "" : " " + unit) + suffix
         }.joined(separator: "\n")
+    }
+}
+
+private struct DysonAutoToggleStyle: ToggleStyle {
+    @Environment(\.isEnabled) private var isEnabled
+    private let charcoal = Color(rgb: 0x454746)
+
+    func makeBody(configuration: Configuration) -> some View {
+        Button {
+            configuration.isOn.toggle()
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: configuration.isOn ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 20, weight: .regular))
+                    .foregroundStyle(configuration.isOn ? charcoal : Color.secondary)
+                    .accessibilityHidden(true)
+                configuration.label
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(configuration.isOn ? charcoal : Color.primary)
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 32)
+            .background(configuration.isOn ? Color.white : Color.primary.opacity(0.08), in: Capsule())
+            .overlay { Capsule().strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5) }
+            .shadow(color: .black.opacity(configuration.isOn ? 0.08 : 0), radius: 3, y: 1)
+            .contentShape(Capsule())
+            .opacity(isEnabled ? 1 : 0.5)
+        }
+        .buttonStyle(.plain)
+        .accessibilityRepresentation {
+            Toggle(isOn: configuration.$isOn) { configuration.label }
+                .toggleStyle(.switch)
+        }
     }
 }
 

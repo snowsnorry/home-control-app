@@ -99,3 +99,20 @@ Scoped final result: blocked (native visual capture unavailable).
 The user's follow-up screenshot confirms the compact circle/title layout and shows unequal card heights when a title wraps. A custom three-column SwiftUI Layout now measures every scene at the actual column width and proposes the largest natural card height to all cells, including subsequent rows. Card backgrounds fill that height, with content aligned to the top. The layout recomputes from the current titles and available width without retaining a stale maximum.
 
 Validation: Xcode Debug build succeeded and source whitespace checks passed. Native inspection returned timeoutReached, so the rendered equal-height layout remains unverified.
+
+
+## Auto capsule toggle — 2026-10-06
+
+Scoped final result: blocked (interaction capture timed out after active-state inspection).
+
+Source visual truth: `/Users/ofilippov/.codex/generated_images/01a110b9-5a4b-7100-a911-6bc9cff478ed/exec-a0af8cec-8f23-458e-82f1-2921b02061bb.png`, the second displayed button concept selected by the user. Source: 1254 × 1254 preview canvas; the button is a fully rounded capsule with a leading filled check circle.
+
+Implementation: native Debug HomeControl app, synthetic `--preview-panel --preview-theme=light` fixtures. Active-state screenshot was captured inline through native computer use (1012 × 1348 pixels, 2× backing scale, panel width 480 pt); the capture tool did not supply a saved path. No combined normalized comparison artifact was available.
+
+Observed: white capsule, leading charcoal check circle, Auto label, restrained shadow and mint card background. Typography uses the existing system font at a compact 13 pt medium weight; control height is 32 pt and symbol size is 20 pt. This adapts the isolated enlarged source to the existing native card. Product imagery and surrounding copy remain unchanged. The accessibility tree exposes the control as a switch named Purifier mode with Auto and value on.
+
+Behavior: the existing Binding still sends `auto: ON/OFF` through HomeStore, and disconnected/pending states still disable the control. Native clicking and subsequent state capture returned `timeoutReached` three times; inactive-state, dark-appearance and keyboard interaction remain unverified. No physical-device controls were exercised.
+
+Validation: Xcode Debug build succeeded, app launch/process verification succeeded, and `git diff --check` passed. No new tests were added for this scoped visual change.
+
+Findings: no evident active-state layout issue in the native screenshot. Full visual and interaction QA remains blocked by the unavailable follow-up capture; do not interpret build success as end-to-end verification.
