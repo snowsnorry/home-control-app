@@ -1,6 +1,28 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Severe air pollution": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Severe air pollution"
+          }
+        }
+      }
+    },
+    "Extremely poor air quality": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Extremely poor air quality"
+          }
+        }
+      }
+    },
     "%lld on": {
       "extractionState": "manual",
       "localizations": {

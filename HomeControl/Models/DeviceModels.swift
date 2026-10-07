@@ -136,8 +136,8 @@ enum DysonPollutant: CaseIterable, Sendable {
     var fraction: Int { self == .pm25 || self == .pm10 ? 0 : 1 }
     var boundaries: [Double] {
         switch self {
-        case .pm25: [36, 54, 71]
-        case .pm10: [51, 76, 101]
+        case .pm25: [36, 54, 71, 151, 251]
+        case .pm10: [51, 76, 101, 351, 421]
         case .voc, .nitrogenDioxide: [4, 7, 9]
         }
     }
@@ -154,13 +154,15 @@ enum DysonPollutant: CaseIterable, Sendable {
         return AirQuality(rawValue: boundaries.filter { value >= $0 }.count)
     }
     // Compare unlike units on the existing quality scale. Within a band,
-    // interpolate toward the next boundary; above the last, extend its interval.
+    // interpolate toward the next boundary; keep the final band below the next
+    // quality level so high gas indices cannot outrank severe particle pollution.
     func severity(for value: Double) -> Double {
         let limits = [0.0] + boundaries
         for index in 0..<(limits.count - 1) where value < limits[index + 1] {
             return Double(index) + (value - limits[index]) / (limits[index + 1] - limits[index])
         }
-        return 3 + (value - limits[3]) / (limits[3] - limits[2])
+        let last = limits.count - 1
+        return Double(last) + min((value - limits[last]) / (limits[last] - limits[last - 1]), 0.999)
     }
 }
 struct DysonPollutantReading {
@@ -204,20 +206,32 @@ struct DysonSnapshot: Equatable, Sendable {
     }
 }
 enum AirQuality: Int, CaseIterable {
-    case good, fair, poor, veryPoor
+    case good, fair, poor, veryPoor, extremelyPoor, severe
     var title: String {
         switch self {
         case .good: String(localized: "Good air quality")
         case .fair: String(localized: "Fair air quality")
         case .poor: String(localized: "Poor air quality")
         case .veryPoor: String(localized: "Very poor air quality")
+        case .extremelyPoor: String(localized: "Extremely poor air quality")
+        case .severe: String(localized: "Severe air pollution")
+        }
+    }
+    var indicatorColor: UInt32 {
+        switch self {
+        case .good: 0x00CC00
+        case .fair: 0xFFE600
+        case .poor: 0xFF8800
+        case .veryPoor: 0xFF3029
+        case .extremelyPoor: 0xFF76D6
+        case .severe: 0x9950FF
         }
     }
     var lightBackground: UInt32 {
-        switch self { case .good: 0xEAF2EC; case .fair: 0xF5F0DF; case .poor: 0xF6EBDD; case .veryPoor: 0xF5E6E6 }
+        switch self { case .good: 0xEAF2EC; case .fair: 0xF5F0DF; case .poor: 0xF6EBDD; case .veryPoor: 0xF5E6E6; case .extremelyPoor: 0xF7E4F0; case .severe: 0xEDE4FA }
     }
     var darkBackground: UInt32 {
-        switch self { case .good: 0x26362C; case .fair: 0x3A3525; case .poor: 0x3D3024; case .veryPoor: 0x3D2729 }
+        switch self { case .good: 0x26362C; case .fair: 0x3A3525; case .poor: 0x3D3024; case .veryPoor: 0x3D2729; case .extremelyPoor: 0x402A3A; case .severe: 0x342943 }
     }
 }
 struct DiscoveredDevice: Identifiable, Equatable { var id: String; var name: String; var host: String; var bridgeID: String? }

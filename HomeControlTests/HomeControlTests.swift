@@ -427,7 +427,7 @@ final class AirQualityTests: XCTestCase {
         XCTAssertNil(snapshot.dominantPollutant(at: later, requireFresh: false))
     }
     func testEveryBoundary() {
-        for (keyPath, boundaries) in [(\DysonSnapshot.pm25, [36.0, 54, 71]), (\DysonSnapshot.pm10, [51.0, 76, 101]),
+        for (keyPath, boundaries) in [(\DysonSnapshot.pm25, [36.0, 54, 71, 151, 251]), (\DysonSnapshot.pm10, [51.0, 76, 101, 351, 421]),
                                        (\DysonSnapshot.voc, [4.0, 7, 9]), (\DysonSnapshot.nitrogenDioxide, [4.0, 7, 9])] {
             var snapshot = DysonSnapshot()
             snapshot[keyPath: keyPath] = SensorReading(value: 0, receivedAt: now)
@@ -439,6 +439,20 @@ final class AirQualityTests: XCTestCase {
                 XCTAssertEqual(snapshot.airQuality(at: now, connected: true)?.rawValue, index + 1)
             }
         }
+    }
+    func testHighGasIndexCannotMaskHigherParticleBand() {
+        var snapshot = DysonSnapshot()
+        snapshot.voc = SensorReading(value: 100, receivedAt: now)
+        snapshot.nitrogenDioxide = SensorReading(value: 100, receivedAt: now)
+        snapshot.pm25 = SensorReading(value: 151, receivedAt: now)
+        XCTAssertEqual(snapshot.airQuality(at: now, connected: true), .extremelyPoor)
+        XCTAssertEqual(snapshot.dominantPollutant(at: now)?.pollutant, .pm25)
+        snapshot.pm10 = SensorReading(value: 421, receivedAt: now)
+        XCTAssertEqual(snapshot.airQuality(at: now, connected: true), .severe)
+        XCTAssertEqual(snapshot.dominantPollutant(at: now)?.pollutant, .pm10)
+        snapshot.pm25 = nil
+        snapshot.pm10 = nil
+        XCTAssertEqual(snapshot.airQuality(at: now, connected: true), .veryPoor)
     }
     func testIndividualPollutantQuality() {
         for pollutant in DysonPollutant.allCases {

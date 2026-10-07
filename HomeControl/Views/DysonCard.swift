@@ -152,13 +152,7 @@ private struct DysonPollutantRow: View {
     @Environment(\.colorScheme) private var colorScheme
     private var quality: AirQuality? { reading?.value.flatMap { pollutant.quality(for: $0) } }
     private var tint: Color {
-        switch quality {
-        case .good: .green
-        case .fair: .yellow
-        case .poor: .orange
-        case .veryPoor: .red
-        case nil: .secondary
-        }
+        quality.map { Color(rgb: $0.indicatorColor) } ?? .secondary
     }
     private var background: Color {
         guard let quality else { return Color.primary.opacity(0.04) }
