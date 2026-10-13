@@ -6,6 +6,32 @@ import CoreImage
 @preconcurrency import CocoaMQTT
 @testable import HomeControl
 
+final class NetworkRecoveryTests: XCTestCase {
+    func testInitialPathDoesNotRestartStartupConnections() {
+        var available = NetworkRecoveryPolicy()
+        var unavailable = NetworkRecoveryPolicy()
+        XCTAssertFalse(available.shouldRecover(isAvailable: true))
+        XCTAssertFalse(unavailable.shouldRecover(isAvailable: false))
+        XCTAssertTrue(unavailable.shouldRecover(isAvailable: true))
+    }
+
+    func testAvailablePathUpdatesNeverTriggerReconnect() {
+        var policy = NetworkRecoveryPolicy()
+        for _ in 0..<100 { XCTAssertFalse(policy.shouldRecover(isAvailable: true)) }
+    }
+
+    func testOutageTriggersOneRecoveryWhenPathReturns() {
+        var policy = NetworkRecoveryPolicy()
+        XCTAssertFalse(policy.shouldRecover(isAvailable: true))
+        XCTAssertFalse(policy.shouldRecover(isAvailable: false))
+        XCTAssertFalse(policy.shouldRecover(isAvailable: false))
+        XCTAssertTrue(policy.shouldRecover(isAvailable: true))
+        XCTAssertFalse(policy.shouldRecover(isAvailable: true))
+        XCTAssertFalse(policy.shouldRecover(isAvailable: false))
+        XCTAssertTrue(policy.shouldRecover(isAvailable: true))
+    }
+}
+
 @MainActor final class DysonConnectionTests: XCTestCase {
     func testClientIDMeetsDysonBrokerLimit() {
         let ids = (0..<100).map { _ in DysonClient.makeClientID() }
@@ -113,6 +139,7 @@ final class CodecTests: XCTestCase {
 @MainActor final class FakeHue: HueClientProtocol {
     var lights: [HueLight] = []
     var commands = 0
+    var watches = 0
     var rejectPair = false
     var confirmLights = false
     var lightCommandIDs: [String] = []
@@ -137,7 +164,7 @@ final class CodecTests: XCTestCase {
             if let on { lights[index].isOn = on }; if let brightness { lights[index].brightness = brightness }
         }
     }
-    func watch(configuration: HueConfiguration, key: String, changed: @escaping @MainActor () async -> Void) async throws { try await Task.sleep(for: .seconds(1000)) }
+    func watch(configuration: HueConfiguration, key: String, changed: @escaping @MainActor () async -> Void) async throws { watches += 1; try await Task.sleep(for: .seconds(1000)) }
 }
 @MainActor final class FakeDyson: DysonClientProtocol {
     var onSnapshot: (@MainActor (DysonSnapshot) -> Void)?
@@ -145,8 +172,10 @@ final class CodecTests: XCTestCase {
     var commands: [[String: String]] = []
     var snapshot = DysonSnapshot()
     var confirm = true
-    func connect(configuration: DysonConfiguration, credential: String) async throws { onSnapshot?(snapshot); onConnection?(.online, nil) }
-    func disconnect() { onConnection?(.offline, nil) }
+    var connections = 0
+    var disconnections = 0
+    func connect(configuration: DysonConfiguration, credential: String) async throws { connections += 1; onSnapshot?(snapshot); onConnection?(.online, nil) }
+    func disconnect() { disconnections += 1; onConnection?(.offline, nil) }
     func requestSensors() { }
     func command(_ fields: [String: String]) throws {
         commands.append(fields)
@@ -159,6 +188,25 @@ final class CodecTests: XCTestCase {
     }
 }
 @MainActor final class StoreTests: XCTestCase {
+    func testNetworkRecoveryPreservesHealthyDeviceConnections() async throws {
+        let (store, hue, dyson, _, _, _) = fixture()
+        try await store.connectHue(HueConfiguration(host: "hue.local", bridgeID: "001788fffe123456"))
+        try await store.connectDyson(DysonConfiguration(host: "dyson.local", serial: "TEST-123", topicPrefix: "438", name: "Test Dyson"), credential: "test-key")
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(store.hueState, .online)
+        XCTAssertEqual(store.dysonState, .online)
+        let connections = dyson.connections, disconnections = dyson.disconnections
+        let watches = hue.watches
+        for _ in 0..<10 { store.recoverConnectionsAfterNetworkChange() }
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(store.hueState, .online)
+        XCTAssertEqual(store.dysonState, .online)
+        XCTAssertEqual(dyson.connections, connections)
+        XCTAssertEqual(dyson.disconnections, disconnections)
+        XCTAssertEqual(hue.watches, watches)
+        store.stop()
+    }
+
     func fixture() -> (HomeStore, FakeHue, FakeDyson, MemorySecrets, MemoryConfiguration, FakeClock) {
         let hue = FakeHue(), dyson = FakeDyson(), secrets = MemorySecrets(), config = MemoryConfiguration(), clock = FakeClock()
         let store = HomeStore(hue: hue, dyson: dyson, secrets: secrets, persistence: config, clock: clock)
@@ -727,13 +775,18 @@ final class AirQualityTests: XCTestCase {
 }
 
 @MainActor final class PanelHeightTests: XCTestCase {
-    func testTallScreenStartsAtExistingHeightAndExpandsToAllContent() {
+    func testTallScreenStartsWithAllContentVisibleAndStillAllowsResizing() {
         let limits = PanelHeightLimits(contentHeight: 920, availableHeight: 1400)
-        XCTAssertEqual(limits.height(preferred: nil), 700)
+        XCTAssertEqual(limits.height(preferred: nil), 932)
         XCTAssertEqual(limits.maximum, 932)
         XCTAssertTrue(limits.canResize)
         XCTAssertEqual(limits.height(preferred: 2000), 932)
         XCTAssertEqual(limits.height(preferred: 300), 700)
+    }
+    func testContentJustAboveOldDefaultDoesNotClipDysonOnLaunch() {
+        let limits = PanelHeightLimits(contentHeight: 716, availableHeight: 1000)
+        XCTAssertEqual(limits.height(preferred: nil), 728)
+        XCTAssertEqual(limits.height(preferred: 700), 700)
     }
     func testShortContentDoesNotCreateBlankSpaceOrAResizeHandle() {
         let limits = PanelHeightLimits(contentHeight: 480, availableHeight: 1400)
@@ -744,6 +797,7 @@ final class AirQualityTests: XCTestCase {
     func testScreenBoundsCapHeightEvenWhenContentIsLonger() {
         let limits = PanelHeightLimits(contentHeight: 1600, availableHeight: 1080)
         XCTAssertEqual(limits.maximum, 1080)
+        XCTAssertEqual(limits.height(preferred: nil), 1080)
         XCTAssertEqual(limits.height(preferred: 2000), 1080)
         let smallScreen = PanelHeightLimits(contentHeight: 920, availableHeight: 620)
         XCTAssertEqual(smallScreen.minimum, 620); XCTAssertEqual(smallScreen.maximum, 620)

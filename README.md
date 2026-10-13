@@ -27,6 +27,8 @@ To build, install in `/Applications`, and launch the app:
 
 The installed path is `/Applications/Home Control.app`. Installation requires write access to `/Applications`. The script advances the build number, refreshes LaunchServices registration, and retires the verified legacy `/Applications/HomeControl.app` bundle after successful replacement. The script verifies the bundle's signature and refuses to replace an app with a different bundle identifier. The previous installation is retained until its replacement succeeds.
 
+By default, local builds use ad-hoc signing. Their signing identity changes with the binary, so macOS can ask for Keychain access again after an update, separately for the Hue, Dyson and HomeKit records. To keep the trusted application identity stable, set `HOME_CONTROL_SIGNING_IDENTITY` to an existing code-signing certificate's name or SHA-1 fingerprint when running the build script, and keep using the same certificate for subsequent builds. Switching from ad-hoc signing can still require approving each existing record once. The app keeps Keychain access restrictions intact.
+
 ### Development
 
 Open `HomeControl.xcodeproj`, select the **HomeControl** scheme and run. Xcode resolves package dependencies automatically. Alternatively, use the build and launch script from the project directory:

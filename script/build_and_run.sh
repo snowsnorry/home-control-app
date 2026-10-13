@@ -5,6 +5,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="HomeControl"
 BUNDLE_ID="com.homecontrol.mac"
 CONFIGURATION="Debug"
+# A persistent certificate keeps Keychain's trusted-app identity stable across
+# rebuilds. Ad-hoc signing remains the fallback when no certificate is configured.
+SIGNING_IDENTITY="${HOME_CONTROL_SIGNING_IDENTITY:--}"
 case "$MODE" in
   --app-build|--app) CONFIGURATION="Release" ;;
   run|--debug|--logs|--telemetry|--verify) ;;
@@ -27,7 +30,7 @@ for PREVIOUS_APP in "/Applications/Home Control.app" "/Applications/$APP_NAME.ap
 done
 
 # Build first so a compiler error leaves the running app available.
-xcodebuild -project "$ROOT_DIR/HomeControl.xcodeproj" -scheme HomeControl -configuration "$CONFIGURATION" -derivedDataPath "$ROOT_DIR/build" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" build
+xcodebuild -project "$ROOT_DIR/HomeControl.xcodeproj" -scheme HomeControl -configuration "$CONFIGURATION" -derivedDataPath "$ROOT_DIR/build" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$SIGNING_IDENTITY" build
 APP_BUNDLE="$ROOT_DIR/build/Build/Products/$CONFIGURATION/$APP_NAME.app"
 
 stop_app() {

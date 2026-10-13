@@ -4,6 +4,17 @@ import Observation
 import Network
 import OSLog
 
+/// A path notification is not a connection failure. Only recovery from an
+/// unavailable path should accelerate the clients' existing retry loops.
+struct NetworkRecoveryPolicy {
+    private var wasAvailable: Bool?
+
+    mutating func shouldRecover(isAvailable: Bool) -> Bool {
+        defer { wasAvailable = isAvailable }
+        return isAvailable && wasAvailable == false
+    }
+}
+
 @main enum HomeControlApp {
     @MainActor static func main() {
         let application = NSApplication.shared
@@ -38,6 +49,7 @@ import OSLog
     private var settingsWindow: NSWindow?
     private var wakeObserver: NSObjectProtocol?
     private let pathMonitor = NWPathMonitor()
+    private var networkRecovery = NetworkRecoveryPolicy()
     private var badgeTask: Task<Void, Never>?
     private var lastBadge: String?
     private var escapeMonitor: Any?
@@ -66,8 +78,12 @@ import OSLog
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.store.reconnect(.hue); self?.store.reconnect(.dyson); self?.store.restartHomeKitAfterNetworkChange() }
         }
-        pathMonitor.pathUpdateHandler = { [weak self] _ in
-            Task { @MainActor in self?.store.reconnect(.hue); self?.store.reconnect(.dyson); self?.store.restartHomeKitAfterNetworkChange() }
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            let isAvailable = path.status == .satisfied
+            Task { @MainActor in
+                guard let self, self.networkRecovery.shouldRecover(isAvailable: isAvailable) else { return }
+                self.store.recoverConnectionsAfterNetworkChange()
+            }
         }
         pathMonitor.start(queue: DispatchQueue(label: "homecontrol.network"))
         store.start()

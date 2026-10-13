@@ -32,7 +32,9 @@ struct PanelHeightLimits: Equatable {
         let handleHeight = contentHeight > minimum && availableHeight > minimum ? Self.resizeHandleHeight : 0
         maximum = min(contentHeight + handleHeight, availableHeight)
     }
-    func height(preferred: CGFloat?) -> CGFloat { min(maximum, max(minimum, preferred ?? minimum)) }
+    // On first launch show all content that fits on the screen. A smaller
+    // height is used only after the user explicitly resizes the panel.
+    func height(preferred: CGFloat?) -> CGFloat { min(maximum, max(minimum, preferred ?? maximum)) }
 }
 
 /// Native mouse tracking keeps the drag in screen coordinates as the popover itself grows.

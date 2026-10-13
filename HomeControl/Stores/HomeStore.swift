@@ -84,6 +84,13 @@ import Observation
         guard configuration.homeKitTemperatureEnabled == true, configuration.dyson != nil else { return }
         homeKit.stop(); homeKit.start(); updateHomeKitTemperature()
     }
+    func recoverConnectionsAfterNetworkChange() {
+        // The default route can change while local device sockets remain healthy.
+        // Retry failed clients promptly without interrupting online or connecting ones.
+        if hueState == .offline { reconnect(.hue) }
+        if dysonState == .offline { reconnect(.dyson) }
+        restartHomeKitAfterNetworkChange()
+    }
     private func updateHomeKitTemperature() {
         guard configuration.homeKitTemperatureEnabled == true, configuration.dyson != nil else { return }
         homeKit.update(dyson, connected: dysonState == .online, now: clock.now)
