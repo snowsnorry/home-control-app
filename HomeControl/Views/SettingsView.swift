@@ -62,6 +62,7 @@ struct SettingsView: View {
         }
         if let error = wizard.selected == .hue ? store.hueError : store.dysonError { ErrorNotice(message: error) }
         if wizard.selected == .hue, store.configuration.hue != nil { HueSceneSettings(store: store) }
+        if wizard.selected == .dyson { HomeKitTemperatureSettings(store: store) }
         Divider()
         Text("Device integrations have not yet been verified with your physical devices.").font(.caption).foregroundStyle(.secondary)
     }

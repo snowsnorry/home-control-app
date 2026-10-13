@@ -17,7 +17,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>27.0</string>
 	<key>LSUIElement</key>
@@ -31,9 +31,14 @@
 	<array>
 		<string>_hue._tcp</string>
 		<string>_dyson_mqtt._tcp</string>
+		<string>_hap._tcp</string>
+        <!-- NetService and HAP use fully qualified types. Declare their exact requests too. -->
+        <string>_hap._tcp.</string>
+        <string>_hue._tcp.</string>
+        <string>_dyson_mqtt._tcp.</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Home Control connects to your Hue Bridge and Dyson purifier on your local network.</string>
+	<string>Home Control connects to your Hue Bridge and Dyson purifier and shares enabled sensor readings with Apple Home on your local network.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

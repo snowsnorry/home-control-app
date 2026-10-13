@@ -2,11 +2,11 @@ import Foundation
 import Security
 
 struct KeychainStore: SecretStoreProtocol {
-    private let service = "com.homecontrol.mac.credentials"
-    private func query(_ account: String) -> [String: Any] {
+    nonisolated private let service = "com.homecontrol.mac.credentials"
+    nonisolated private func query(_ account: String) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
     }
-    func read(_ account: String) throws -> String? {
+    nonisolated func read(_ account: String) throws -> String? {
         var request = query(account)
         request[kSecReturnData as String] = true
         request[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -16,7 +16,7 @@ struct KeychainStore: SecretStoreProtocol {
         guard status == errSecSuccess, let data = item as? Data, let value = String(data: data, encoding: .utf8) else { throw error(status) }
         return value
     }
-    func write(_ value: String, account: String) throws {
+    nonisolated func write(_ value: String, account: String) throws {
         let data = Data(value.utf8)
         let status = SecItemUpdate(query(account) as CFDictionary, [kSecValueData as String: data] as CFDictionary)
         if status == errSecItemNotFound {
@@ -27,11 +27,11 @@ struct KeychainStore: SecretStoreProtocol {
             guard result == errSecSuccess else { throw error(result) }
         } else if status != errSecSuccess { throw error(status) }
     }
-    func delete(_ account: String) throws {
+    nonisolated func delete(_ account: String) throws {
         let status = SecItemDelete(query(account) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw error(status) }
     }
-    private func error(_ status: OSStatus) -> ControlError {
+    nonisolated private func error(_ status: OSStatus) -> ControlError {
         .message(String(localized: "Keychain operation failed.") + " (\(status))")
     }
 }

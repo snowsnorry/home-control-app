@@ -11,8 +11,23 @@ case "$MODE" in
   *) echo "usage: $0 [--app-build|--app|run|--debug|--logs|--telemetry|--verify]" >&2; exit 2 ;;
 esac
 
+# Give each local build distinct version metadata instead of reinstalling every change
+# as version 1. The application target expands this value into its Info.plist.
+BUILD_NUMBER=2
+for PREVIOUS_APP in "/Applications/Home Control.app" "/Applications/$APP_NAME.app" "$ROOT_DIR/dist/$APP_NAME.app"; do
+  PREVIOUS_PLIST="$PREVIOUS_APP/Contents/Info.plist"
+  if [[ -f "$PREVIOUS_PLIST" ]]; then
+    PREVIOUS_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PREVIOUS_PLIST" 2>/dev/null || true)"
+    PREVIOUS_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PREVIOUS_PLIST" 2>/dev/null || true)"
+    if [[ "$PREVIOUS_ID" == "$BUNDLE_ID" && "$PREVIOUS_VERSION" =~ ^[0-9]{1,8}$ ]]; then
+      NEXT_VERSION=$((10#$PREVIOUS_VERSION + 1))
+      if (( NEXT_VERSION > BUILD_NUMBER )); then BUILD_NUMBER=$NEXT_VERSION; fi
+    fi
+  fi
+done
+
 # Build first so a compiler error leaves the running app available.
-xcodebuild -project "$ROOT_DIR/HomeControl.xcodeproj" -scheme HomeControl -configuration "$CONFIGURATION" -derivedDataPath "$ROOT_DIR/build" build
+xcodebuild -project "$ROOT_DIR/HomeControl.xcodeproj" -scheme HomeControl -configuration "$CONFIGURATION" -derivedDataPath "$ROOT_DIR/build" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" build
 APP_BUNDLE="$ROOT_DIR/build/Build/Products/$CONFIGURATION/$APP_NAME.app"
 
 stop_app() {
@@ -36,7 +51,7 @@ if [[ "$MODE" == "--app-build" || "$MODE" == "--app" ]]; then
   echo "Built $APP_BUNDLE"
   if [[ "$MODE" == "--app-build" ]]; then exit 0; fi
 
-  INSTALLED_APP="/Applications/$APP_NAME.app"
+  INSTALLED_APP="/Applications/Home Control.app"
   if [[ -L "$INSTALLED_APP" ]]; then
     echo "Refusing to replace a symbolic link: $INSTALLED_APP" >&2
     exit 1
@@ -71,6 +86,17 @@ if [[ "$MODE" == "--app-build" || "$MODE" == "--app" ]]; then
   fi
   /bin/rm -rf "$INSTALL_STAGE"
   trap - EXIT
+  # Refresh LaunchServices after replacement. Retire only our verified legacy bundle.
+  LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+  "$LSREGISTER" -f "$INSTALLED_APP"
+  LEGACY_APP="/Applications/$APP_NAME.app"
+  if [[ -d "$LEGACY_APP" && ! -L "$LEGACY_APP" ]]; then
+    LEGACY_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$LEGACY_APP/Contents/Info.plist" 2>/dev/null || true)"
+    if [[ "$LEGACY_ID" == "$BUNDLE_ID" ]]; then
+      "$LSREGISTER" -u "$LEGACY_APP" || true
+      /bin/rm -rf "$LEGACY_APP"
+    fi
+  fi
   /usr/bin/open -n "$INSTALLED_APP"
   echo "Installed and launched $INSTALLED_APP"
   exit 0

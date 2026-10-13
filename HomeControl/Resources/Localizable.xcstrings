@@ -1,6 +1,281 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Bonjour discovery failed (code: %lld, domain: %lld).": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bonjour discovery failed (code: %lld, domain: %lld)."
+          }
+        }
+      }
+    },
+    "Bonjour did not discover this accessory within 10 seconds. This does not establish a permissions problem. Check visibility again to retry.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bonjour did not discover this accessory within 10 seconds. This does not establish a permissions problem. Check visibility again to retry."
+          }
+        }
+      }
+    },
+    "Checking visibility on the local network…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking visibility on the local network…"
+          }
+        }
+      }
+    },
+    "Check Visibility Again": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check Visibility Again"
+          }
+        }
+      }
+    },
+    "In Home on your iPhone or iPad, tap Add Accessory and scan this QR code.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In Home on your iPhone or iPad, tap Add Accessory and scan this QR code."
+          }
+        }
+      }
+    },
+    "The accessory is not visible on the local network. Allow Home Control in System Settings → Privacy & Security → Local Network, then check visibility again. Also check VPN or firewall restrictions.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The accessory is not visible on the local network. Allow Home Control in System Settings → Privacy & Security → Local Network, then check visibility again. Also check VPN or firewall restrictions."
+          }
+        }
+      }
+    },
+    "Local network discovery is unavailable. Allow Home Control in System Settings → Privacy & Security → Local Network, then check visibility again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local network discovery is unavailable. Allow Home Control in System Settings → Privacy & Security → Local Network, then check visibility again."
+          }
+        }
+      }
+    },
+    "Disabled": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disabled"
+          }
+        }
+      }
+    },
+    "Starting…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Starting…"
+          }
+        }
+      }
+    },
+    "Ready to add to Apple Home": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ready to add to Apple Home"
+          }
+        }
+      }
+    },
+    "Paired with Apple Home": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paired with Apple Home"
+          }
+        }
+      }
+    },
+    "Apple Home unavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Home unavailable"
+          }
+        }
+      }
+    },
+    "Apple Home · Experimental": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Home · Experimental"
+          }
+        }
+      }
+    },
+    "Pairing is saved": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pairing is saved"
+          }
+        }
+      }
+    },
+    "Setup code": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Setup code"
+          }
+        }
+      }
+    },
+    "On your iPhone or iPad, open Home → Add Accessory → More Options, select Dyson Temperature, and enter this code.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On your iPhone or iPad, open Home → Add Accessory → More Options, select Dyson Temperature, and enter this code."
+          }
+        }
+      }
+    },
+    "Apple Home compatibility has not yet been verified with physical devices.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Home compatibility has not yet been verified with physical devices."
+          }
+        }
+      }
+    },
+    "Reset Apple Home Pairing…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset Apple Home Pairing…"
+          }
+        }
+      }
+    },
+    "Reset Apple Home pairing?": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset Apple Home pairing?"
+          }
+        }
+      }
+    },
+    "Reset Pairing": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset Pairing"
+          }
+        }
+      }
+    },
+    "This disables sharing and removes the saved pairing. Remove the old Dyson Temperature accessory from Home, then enable sharing and add it again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This disables sharing and removes the saved pairing. Remove the old Dyson Temperature accessory from Home, then enable sharing and add it again."
+          }
+        }
+      }
+    },
+    "Apple Home pairing data could not be loaded or saved. Retry, or reset pairing explicitly.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Home pairing data could not be loaded or saved. Retry, or reset pairing explicitly."
+          }
+        }
+      }
+    },
+    "Apple Home could not start its local server. Disable and enable sharing to retry.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Home could not start its local server. Disable and enable sharing to retry."
+          }
+        }
+      }
+    },
+    "Apple Home pairing data could not be removed. Retry resetting pairing.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Home pairing data could not be removed. Retry resetting pairing."
+          }
+        }
+      }
+    },
+    "Apple Home pairing data could not be saved. Sharing has stopped; retry before adding the accessory.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Home pairing data could not be saved. Sharing has stopped; retry before adding the accessory."
+          }
+        }
+      }
+    },
     "Severe air pollution": {
       "extractionState": "manual",
       "localizations": {
@@ -1647,6 +1922,39 @@
           "stringUnit": {
             "state": "translated",
             "value": "The scene has no explicit lights to turn off."
+          }
+        }
+      }
+    },
+    "Share data with Apple Home": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share data with Apple Home"
+          }
+        }
+      }
+    },
+    "Waiting for fresh sensor data": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for fresh sensor data"
+          }
+        }
+      }
+    },
+    "Your Mac and iPhone must be on the same local network. Sharing requires Home Control to be running and your Mac to be awake. The accessory requires fresh temperature, humidity, PM2.5 and PM10 readings. If any reading is unavailable or 120 seconds old, all shared readings become unavailable until fresh data returns.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your Mac and iPhone must be on the same local network. Sharing requires Home Control to be running and your Mac to be awake. The accessory requires fresh temperature, humidity, PM2.5 and PM10 readings. If any reading is unavailable or 120 seconds old, all shared readings become unavailable until fresh data returns."
           }
         }
       }

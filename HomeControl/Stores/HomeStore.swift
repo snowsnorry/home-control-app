@@ -9,12 +9,14 @@ import Observation
     private(set) var scenes: [HueScene] = []
     private(set) var pendingSceneID: String?
     private(set) var dyson = DysonSnapshot()
+    private(set) var homeKitStatus = HomeKitTemperatureStatus()
     private(set) var now: Date
     var hueError: String?
     var dysonError: String?
     var storageError: String?
     private(set) var pendingLights: Set<String> = []
     private(set) var dysonPending = false
+    @ObservationIgnored private let homeKit: any HomeKitTemperatureServerProtocol
     @ObservationIgnored private let hue: any HueClientProtocol
     @ObservationIgnored private let dysonClient: any DysonClientProtocol
     @ObservationIgnored private let secrets: any SecretStoreProtocol
@@ -30,10 +32,18 @@ import Observation
     @ObservationIgnored private var started = false
 
     init(hue: any HueClientProtocol = HueClient(), dyson: any DysonClientProtocol = DysonClient(),
-         secrets: any SecretStoreProtocol = KeychainStore(), persistence: any ConfigurationStoreProtocol = FileConfigurationStore(), clock: any AppClock = SystemClock()) {
+         secrets: any SecretStoreProtocol = KeychainStore(), persistence: any ConfigurationStoreProtocol = FileConfigurationStore(), clock: any AppClock = SystemClock(), homeKit: any HomeKitTemperatureServerProtocol = HomeKitTemperatureServer()) {
+        self.homeKit = homeKit
         self.hue = hue; self.dysonClient = dyson; self.secrets = secrets; self.persistence = persistence; self.clock = clock
         now = clock.now
         do { configuration = try persistence.load() } catch { storageError = error.localizedDescription }
+        homeKit.onStatus = { [weak self] status in
+            guard let self else { return }
+            // Ignore queued running statuses after the preference has been disabled.
+            if self.configuration.homeKitTemperatureEnabled == true || status.state == .disabled || status.state == .failed {
+                self.homeKitStatus = status
+            }
+        }
         dyson.onSnapshot = { [weak self] snapshot in
             guard let self else { return }
             var merged = snapshot
@@ -44,11 +54,39 @@ import Observation
             if merged.voc == nil { merged.voc = self.dyson.voc }
             if merged.nitrogenDioxide == nil { merged.nitrogenDioxide = self.dyson.nitrogenDioxide }
             self.dyson = merged
+            self.updateHomeKitTemperature()
         }
         dyson.onConnection = { [weak self] state, error in
             self?.dysonState = state
+            self?.updateHomeKitTemperature()
             if let error { self?.dysonError = error }
         }
+    }
+    func setHomeKitTemperatureEnabled(_ enabled: Bool) {
+        guard !enabled || configuration.dyson != nil else { return }
+        var updated = configuration; updated.homeKitTemperatureEnabled = enabled
+        do {
+            try persistence.save(updated); configuration = updated; storageError = nil
+            if enabled {
+                homeKit.stop(); homeKit.start(); updateHomeKitTemperature()
+            } else { homeKit.stop(); homeKitStatus = HomeKitTemperatureStatus() }
+        } catch { storageError = error.localizedDescription }
+    }
+    func resetHomeKitPairing() {
+        // Save the disabled preference before deleting keys: a failed save must leave pairing intact.
+        var updated = configuration; updated.homeKitTemperatureEnabled = false
+        do {
+            try persistence.save(updated); configuration = updated; storageError = nil
+            homeKit.reset(); homeKitStatus = HomeKitTemperatureStatus()
+        } catch { storageError = error.localizedDescription }
+    }
+    func restartHomeKitAfterNetworkChange() {
+        guard configuration.homeKitTemperatureEnabled == true, configuration.dyson != nil else { return }
+        homeKit.stop(); homeKit.start(); updateHomeKitTemperature()
+    }
+    private func updateHomeKitTemperature() {
+        guard configuration.homeKitTemperatureEnabled == true, configuration.dyson != nil else { return }
+        homeKit.update(dyson, connected: dysonState == .online, now: clock.now)
     }
     var visibleScenes: [HueScene] {
         let selected = Set(configuration.hue?.selectedSceneIDs ?? [])
@@ -88,18 +126,23 @@ import Observation
     func start() {
         guard !started else { return }; started = true
         reconnect(.hue); reconnect(.dyson)
+        if configuration.homeKitTemperatureEnabled == true, configuration.dyson != nil {
+            homeKit.start(); updateHomeKitTemperature()
+        }
         timer = Task { [weak self] in
             var seconds = 0
             while !Task.isCancelled {
                 guard let self else { return }
                 do { try await self.clock.sleep(seconds: 1) } catch { return }
                 self.now = self.clock.now; seconds += 1
+                self.updateHomeKitTemperature()
                 if seconds % 30 == 0, self.dysonState == .online { self.dysonClient.requestSensors() }
             }
         }
     }
     func stop() {
         hueTask?.cancel(); dysonTask?.cancel(); timer?.cancel(); cancelCommands()
+        homeKit.stop()
         dysonClient.disconnect(); started = false
     }
     private func cancelCommands() {
@@ -211,8 +254,9 @@ import Observation
     func remove(_ kind: DeviceKind) {
         do {
             var updated = configuration
-            if kind == .hue { updated.hue = nil } else { updated.dyson = nil }
+            if kind == .hue { updated.hue = nil } else { updated.dyson = nil; updated.homeKitTemperatureEnabled = false }
             try commit(updated, account: kind.rawValue, secret: nil)
+            if kind == .dyson { homeKit.stop(); homeKitStatus = HomeKitTemperatureStatus() }
             cancelCommands()
             if kind == .hue { lights = []; scenes = []; hueError = nil } else { dyson = DysonSnapshot(); dysonError = nil }
             reconnect(kind)

@@ -2,10 +2,18 @@ import AppKit
 import SwiftUI
 import Observation
 import Network
+import OSLog
 
 @main enum HomeControlApp {
     @MainActor static func main() {
         let application = NSApplication.shared
+        if CommandLine.arguments.contains("--diagnose-bonjour") {
+            let diagnostic = BonjourDiagnostic()
+            application.setActivationPolicy(.accessory)
+            diagnostic.start()
+            withExtendedLifetime(diagnostic) { application.run() }
+            return
+        }
         let delegate = AppDelegate()
         application.delegate = delegate
         application.setActivationPolicy(.accessory)
@@ -56,10 +64,10 @@ import Network
         popover.contentSize = NSSize(width: 480, height: 464)
         popover.contentViewController = NSHostingController(rootView: makeDevicePanel())
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.store.reconnect(.hue); self?.store.reconnect(.dyson) }
+            Task { @MainActor in self?.store.reconnect(.hue); self?.store.reconnect(.dyson); self?.store.restartHomeKitAfterNetworkChange() }
         }
         pathMonitor.pathUpdateHandler = { [weak self] _ in
-            Task { @MainActor in self?.store.reconnect(.hue); self?.store.reconnect(.dyson) }
+            Task { @MainActor in self?.store.reconnect(.hue); self?.store.reconnect(.dyson); self?.store.restartHomeKitAfterNetworkChange() }
         }
         pathMonitor.start(queue: DispatchQueue(label: "homecontrol.network"))
         store.start()
@@ -156,5 +164,48 @@ import Network
         store.stop(); wizard.cancel(); pathMonitor.cancel(); badgeTask?.cancel()
         if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
         if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
+    }
+}
+
+/// Runs in the GUI bundle without opening settings, configuration or Keychain.
+@MainActor private final class BonjourDiagnostic: NSObject, @preconcurrency NetServiceBrowserDelegate {
+    private let log = Logger(subsystem: "com.homecontrol.mac", category: "BonjourDiagnostic")
+    private var browsers: [NetServiceBrowser] = []
+    private var types: [ObjectIdentifier: String] = [:]
+    private var networkBrowser: NWBrowser?
+    func start() {
+        let bundleID = Bundle.main.bundleIdentifier ?? "missing"
+        let declared = (Bundle.main.object(forInfoDictionaryKey: "NSBonjourServices") as? [String] ?? []).joined(separator: ",")
+        log.notice("Bundle=\(bundleID, privacy: .public); declared=\(declared, privacy: .public)")
+        for type in ["_hap._tcp.", "_hue._tcp."] {
+            let browser = NetServiceBrowser()
+            browsers.append(browser); types[ObjectIdentifier(browser)] = type
+            browser.delegate = self
+            browser.searchForServices(ofType: type, inDomain: "local.")
+        }
+        let nw = NWBrowser(for: .bonjour(type: "_hap._tcp", domain: "local."), using: .tcp)
+        networkBrowser = nw
+        nw.stateUpdateHandler = { [log] state in
+            log.notice("NWBrowser state: \(String(describing: state), privacy: .public)")
+        }
+        nw.browseResultsChangedHandler = { [log] results, _ in
+            log.notice("NWBrowser result count: \(results.count, privacy: .public)")
+        }
+        nw.start(queue: DispatchQueue(label: "homecontrol.bonjour-diagnostic"))
+        Task {
+            try? await Task.sleep(for: .seconds(8))
+            browsers.forEach { $0.stop() }
+            networkBrowser?.cancel()
+            NSApplication.shared.terminate(nil)
+        }
+    }
+    func netServiceBrowserWillSearch(_ browser: NetServiceBrowser) {
+        log.notice("NetService searching: \(self.types[ObjectIdentifier(browser)] ?? "unknown", privacy: .public)")
+    }
+    func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String: NSNumber]) {
+        log.error("NetService failed: \(self.types[ObjectIdentifier(browser)] ?? "unknown", privacy: .public); \(String(describing: errorDict), privacy: .public)")
+    }
+    func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
+        log.notice("NetService found type: \(service.type, privacy: .public)")
     }
 }

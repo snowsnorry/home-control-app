@@ -1,6 +1,8 @@
 import XCTest
 import AppKit
 import Security
+import CoreImage
+@preconcurrency import HAP
 @preconcurrency import CocoaMQTT
 @testable import HomeControl
 
@@ -940,5 +942,589 @@ final class AirQualityTests: XCTestCase {
         XCTAssertEqual(hue.commands, 1)
         XCTAssertTrue(hue.lightCommandIDs.isEmpty)
         store.stop()
+    }
+}
+
+@MainActor final class FakeHomeKitTemperatureServer: HomeKitTemperatureServerProtocol {
+    var onStatus: (@MainActor (HomeKitTemperatureStatus) -> Void)?
+    var starts = 0
+    var stops = 0
+    var resets = 0
+    var readings: [(DysonSnapshot, Bool, Date)] = []
+    func start() { starts += 1 }
+    func stop() { stops += 1 }
+    func reset() { resets += 1 }
+    func update(_ snapshot: DysonSnapshot, connected: Bool, now: Date) { readings.append((snapshot, connected, now)) }
+}
+
+final class MemoryHomeKitIdentity: HomeKitSecretStorage, @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: Data?
+    var failLoad = false
+    var failSave = false
+    var failDelete = false
+    var saves = 0
+    func load() throws -> Data? {
+        try lock.withLock { if failLoad { throw HomeKitStorageError.missingConfiguration }; return stored }
+    }
+    func save(_ data: Data) throws {
+        try lock.withLock { if failSave { throw HomeKitStorageError.missingConfiguration }; stored = data; saves += 1 }
+    }
+    func delete() throws {
+        try lock.withLock { if failDelete { throw HomeKitStorageError.missingConfiguration }; stored = nil }
+    }
+}
+
+@MainActor private final class FakeHomeKitBonjourMonitor: HomeKitBonjourMonitoring {
+    private(set) var starts = 0
+    private(set) var stops = 0
+    private var completion: (@MainActor (String?) -> Void)?
+    func start(identifier: String, completion: @escaping @MainActor (String?) -> Void) {
+        starts += 1; self.completion = completion
+    }
+    func stop() { stops += 1; completion = nil }
+    func finish(error: String?) { completion?(error) }
+}
+
+@MainActor private final class HomeKitBonjourProbe: NSObject, @preconcurrency NetServiceBrowserDelegate, @preconcurrency NetServiceDelegate {
+    private let browser = NetServiceBrowser()
+    private var services: [NetService] = []
+    let identifier: String
+    private(set) var found = false
+    init(identifier: String) { self.identifier = identifier }
+    func start() {
+        browser.delegate = self
+        browser.searchForServices(ofType: "_hap._tcp.", inDomain: "local.")
+    }
+    func stop() { browser.stop(); services.forEach { $0.stop() }; services = [] }
+    func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
+        guard service.name.hasPrefix("Dyson Temperature") else { return }
+        services.append(service); service.delegate = self; service.resolve(withTimeout: 3)
+    }
+    func netServiceDidResolveAddress(_ sender: NetService) {
+        let record = sender.txtRecordData().map(NetService.dictionary(fromTXTRecord:)) ?? [:]
+        if record["id"] == Data(identifier.utf8), sender.port > 0 { found = true }
+    }
+}
+
+@MainActor final class HomeKitTemperatureTests: XCTestCase {
+    private func sensorSnapshot(_ temperature: SensorReading?) -> DysonSnapshot {
+        var snapshot = DysonSnapshot()
+        snapshot.temperature = temperature
+        if let date = temperature?.receivedAt {
+            snapshot.humidity = SensorReading(value: 45, receivedAt: date)
+            snapshot.pm25 = SensorReading(value: 10, receivedAt: date)
+            snapshot.pm10 = SensorReading(value: 20, receivedAt: date)
+        }
+        return snapshot
+    }
+
+    private func fixture(enabled: Bool = false) -> (HomeStore, FakeDyson, FakeHomeKitTemperatureServer, MemoryConfiguration, FakeClock) {
+        let dyson = FakeDyson(), server = FakeHomeKitTemperatureServer(), configuration = MemoryConfiguration(), clock = FakeClock()
+        configuration.saved.dyson = DysonConfiguration(host: "dyson.local", serial: "test", topicPrefix: "438", name: "Dyson")
+        configuration.saved.homeKitTemperatureEnabled = enabled
+        let secrets = MemorySecrets(); secrets.values["dyson"] = "dummy"
+        let store = HomeStore(hue: FakeHue(), dyson: dyson, secrets: secrets, persistence: configuration, clock: clock, homeKit: server)
+        return (store, dyson, server, configuration, clock)
+    }
+    func testBundleDeclaresTheExactFullyQualifiedBonjourTypesRequestedByNetService() throws {
+        let project = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let data = try Data(contentsOf: project.appending(path: "HomeControl/Info.plist"))
+        let info = try PropertyListSerialization.propertyList(from: data, format: nil) as! [String: Any]
+        let types = try XCTUnwrap(info["NSBonjourServices"] as? [String])
+        // mDNSResponder on macOS requires the literal type requested by NetService/HAP.
+        for type in ["_hap._tcp.", "_hue._tcp.", "_dyson_mqtt._tcp."] {
+            XCTAssertTrue(types.contains(type), "Undeclared Bonjour type: \(type)")
+        }
+        XCTAssertNotNil(info["NSLocalNetworkUsageDescription"] as? String)
+    }
+    func testBonjourFailurePreservesCodesWithoutClaimingPermissionIsDisabled() {
+        let error = HomeKitBonjourMonitor.searchFailure(code: -72008, domain: 10)
+        XCTAssertTrue(error.contains("-72008")); XCTAssertTrue(error.contains("10"))
+        XCTAssertFalse(error.contains("Allow Home Control"))
+        XCTAssertFalse(error.contains("permission"))
+    }
+    func testOldConfigurationDefaultsToDisabled() throws {
+        let configuration = try JSONDecoder().decode(SavedConfiguration.self, from: Data(#"{"hue":null,"dyson":null}"#.utf8))
+        XCTAssertNil(configuration.homeKitTemperatureEnabled)
+    }
+    func testEnableDisableAndResetArePersistent() {
+        let (store, _, server, configuration, _) = fixture()
+        XCTAssertEqual(server.starts, 0)
+        store.setHomeKitTemperatureEnabled(true)
+        XCTAssertEqual(configuration.saved.homeKitTemperatureEnabled, true)
+        XCTAssertEqual(server.starts, 1)
+        store.setHomeKitTemperatureEnabled(false)
+        XCTAssertEqual(configuration.saved.homeKitTemperatureEnabled, false)
+        XCTAssertEqual(server.resets, 0, "Disabling must preserve pairing")
+        store.resetHomeKitPairing()
+        XCTAssertEqual(server.resets, 1)
+        XCTAssertEqual(configuration.saved.homeKitTemperatureEnabled, false)
+    }
+    func testFailedPreferenceSaveDoesNotStartStopOrResetServer() {
+        let (store, _, server, configuration, _) = fixture()
+        configuration.fail = true
+        store.setHomeKitTemperatureEnabled(true)
+        store.resetHomeKitPairing()
+        XCTAssertEqual(server.starts, 0); XCTAssertEqual(server.stops, 0); XCTAssertEqual(server.resets, 0)
+        XCTAssertNotNil(store.storageError)
+    }
+    func testSnapshotDisconnectionRecoveryAndRemoval() {
+        let (store, dyson, server, configuration, clock) = fixture()
+        store.setHomeKitTemperatureEnabled(true)
+        dyson.onConnection?(.online, nil)
+        var snapshot = DysonSnapshot(); snapshot.temperature = SensorReading(value: 23.4, receivedAt: clock.now)
+        snapshot.humidity = SensorReading(value: 47, receivedAt: clock.now)
+        snapshot.pm25 = SensorReading(value: 12, receivedAt: clock.now)
+        snapshot.pm10 = SensorReading(value: 34, receivedAt: clock.now)
+        snapshot.voc = SensorReading(value: 5, receivedAt: clock.now)
+        snapshot.nitrogenDioxide = SensorReading(value: 7, receivedAt: clock.now)
+        dyson.onSnapshot?(snapshot)
+        XCTAssertEqual(server.readings.last?.0, snapshot)
+        XCTAssertEqual(server.readings.last?.1, true)
+        dyson.onConnection?(.offline, nil)
+        XCTAssertEqual(server.readings.last?.1, false)
+        dyson.onConnection?(.online, nil)
+        XCTAssertEqual(server.readings.last?.1, true)
+        store.remove(.dyson)
+        XCTAssertEqual(configuration.saved.homeKitTemperatureEnabled, false)
+        XCTAssertNil(configuration.saved.dyson)
+        XCTAssertEqual(server.resets, 0)
+    }
+    func testEnabledPreferenceRestartsOnLaunchAndNetworkChange() {
+        let (store, _, server, _, _) = fixture(enabled: true)
+        store.start()
+        XCTAssertEqual(server.starts, 1)
+        store.restartHomeKitAfterNetworkChange()
+        XCTAssertEqual(server.starts, 2)
+        store.stop()
+        XCTAssertGreaterThanOrEqual(server.stops, 2)
+    }
+    func testStalenessWithoutNewMessagesIsForwardedByTimer() async {
+        let (store, dyson, server, _, clock) = fixture(enabled: true)
+        var snapshot = DysonSnapshot(); snapshot.temperature = SensorReading(value: 21, receivedAt: clock.now)
+        dyson.snapshot = snapshot
+        store.start()
+        for _ in 0..<500 {
+            await Task.yield()
+            if server.readings.contains(where: { $0.1 && $0.2.timeIntervalSince1970 >= 120 }) { break }
+        }
+        store.stop()
+        let stale = server.readings.first { $0.1 && $0.2.timeIntervalSince1970 >= 120 }
+        XCTAssertNotNil(stale)
+        if let stale { XCTAssertNil(HomeKitTemperatureServer.validTemperature(stale.0.temperature, connected: stale.1, now: stale.2)) }
+    }
+    func testAirQualityUsesAllSixLevelsAndFreshGasReadings() throws {
+        XCTAssertEqual(AirQuality.allCases.map(HomeKitAirReadings.qualityValue), [1, 2, 3, 4, 5, 5])
+        let now = Date(timeIntervalSince1970: 1000)
+        var snapshot = sensorSnapshot(SensorReading(value: 23, receivedAt: now))
+        XCTAssertEqual(HomeKitAirReadings.make(snapshot, connected: true, now: now)?.quality, 1)
+        snapshot.voc = SensorReading(value: 9, receivedAt: now.addingTimeInterval(-119))
+        XCTAssertEqual(HomeKitAirReadings.make(snapshot, connected: true, now: now)?.quality, 4)
+        XCTAssertEqual(HomeKitAirReadings.make(snapshot, connected: true, now: now.addingTimeInterval(1))?.quality, 1)
+        snapshot.voc = nil
+        snapshot.nitrogenDioxide = SensorReading(value: 7, receivedAt: now)
+        XCTAssertEqual(HomeKitAirReadings.make(snapshot, connected: true, now: now)?.quality, 3)
+        snapshot.voc = SensorReading(value: 9, receivedAt: now.addingTimeInterval(1))
+        snapshot.nitrogenDioxide = SensorReading(value: .nan, receivedAt: now)
+        XCTAssertEqual(HomeKitAirReadings.make(snapshot, connected: true, now: now)?.quality, 1)
+        snapshot.pm25 = SensorReading(value: 300, receivedAt: now)
+        XCTAssertEqual(HomeKitAirReadings.make(snapshot, connected: true, now: now)?.quality, 5)
+    }
+
+    func testEverySharedNumericReadingMustBeValidAndFresh() {
+        let now = Date(timeIntervalSince1970: 1000)
+        let baseline = sensorSnapshot(SensorReading(value: 23, receivedAt: now))
+        let fields: [(WritableKeyPath<DysonSnapshot, SensorReading?>, Double)] = [
+            (\.temperature, 100), (\.humidity, 100), (\.pm25, 1000), (\.pm10, 1000)]
+        for (field, maximum) in fields {
+            for value in [0.0, maximum] {
+                var snapshot = baseline
+                snapshot[keyPath: field] = SensorReading(value: value, receivedAt: now)
+                XCTAssertNotNil(HomeKitAirReadings.make(snapshot, connected: true, now: now))
+            }
+            for value in [-1.0, maximum + 0.1, Double.nan, Double.infinity] {
+                var snapshot = baseline
+                snapshot[keyPath: field] = SensorReading(value: value, receivedAt: now)
+                XCTAssertNil(HomeKitAirReadings.make(snapshot, connected: true, now: now))
+            }
+            for reading: SensorReading? in [nil, SensorReading(value: nil, receivedAt: now),
+                SensorReading(value: 1, receivedAt: now.addingTimeInterval(-120)),
+                SensorReading(value: 1, receivedAt: now.addingTimeInterval(0.01))] {
+                var snapshot = baseline; snapshot[keyPath: field] = reading
+                XCTAssertNil(HomeKitAirReadings.make(snapshot, connected: true, now: now))
+            }
+            var snapshot = baseline
+            snapshot[keyPath: field] = SensorReading(value: 1, receivedAt: now.addingTimeInterval(-119.999))
+            XCTAssertNotNil(HomeKitAirReadings.make(snapshot, connected: true, now: now))
+        }
+        XCTAssertNil(HomeKitAirReadings.make(baseline, connected: false, now: now))
+    }
+
+    func testTemperatureOnlyPairingMigratesWithStableIIDsAndOneConfigurationIncrement() throws {
+        let backing = MemoryHomeKitIdentity()
+        let legacyStorage = try HomeKitIdentityStorage(backing: backing)
+        let legacy = HAP.Accessory.Thermometer(info: HAP.Service.Info(name: "Dyson Temperature",
+            serialNumber: "homecontrol-temperature", manufacturer: "Home Control", model: "Dyson Temperature"))
+        let legacyDevice = HAP.Device(storage: legacyStorage, accessory: legacy)
+        var config = try JSONSerialization.jsonObject(with: legacyStorage.read()) as! [String: Any]
+        let controller = Data("synthetic-controller".utf8).base64EncodedString()
+        config["pairings"] = [controller, ["identifier": controller,
+            "publicKey": Data(repeating: 7, count: 32).base64EncodedString(), "role": 1]] as [Any]
+        try backing.save(JSONSerialization.data(withJSONObject: config))
+        let (expanded, sensor) = try HomeKitIdentityStorage(backing: backing).prepareDevice()
+        XCTAssertTrue(expanded.isPaired)
+        let updated = try JSONSerialization.jsonObject(with: XCTUnwrap(backing.load())) as! NSDictionary
+        for key in ["identifier", "privateKey", "setupCode", "setupKey", "pairings", "aidForAccessorySerialNumber"] {
+            XCTAssertEqual(config[key] as? NSObject, updated[key] as? NSObject)
+        }
+        XCTAssertEqual((updated["number"] as? NSNumber)?.intValue, (config["number"] as! NSNumber).intValue + 1)
+        func json(_ accessory: HAP.Accessory) throws -> NSDictionary {
+            try JSONSerialization.jsonObject(with: JSONSerialization.data(withJSONObject: accessory.serialized())) as! NSDictionary
+        }
+        let oldJSON = try json(legacyDevice.accessories[0])
+        let newJSON = try json(expanded.accessories[0])
+        XCTAssertEqual(oldJSON["aid"] as? NSNumber, newJSON["aid"] as? NSNumber)
+        let oldServices = oldJSON["services"] as! [NSDictionary]
+        let newServices = newJSON["services"] as! [NSDictionary]
+        XCTAssertEqual(Array(newServices.prefix(oldServices.count)), oldServices)
+        XCTAssertEqual(newServices.count, oldServices.count + 2)
+        let values = HomeKitAirReadings(temperature: 23.5, humidity: 47, pm25: 12, pm10: 34, quality: 5)
+        sensor.apply(values)
+        let applied = try json(sensor)["services"] as! [NSDictionary]
+        let characteristics = applied.flatMap { $0["characteristics"] as! [NSDictionary] }
+        func characteristic(_ code: UInt32) throws -> NSDictionary {
+            try XCTUnwrap(characteristics.first {
+                UInt32(($0["type"] as! String).split(separator: "-")[0], radix: 16) == code
+            })
+        }
+        let expectedCharacteristics: [(UInt32, Double, String?)] = [
+            (0x11, 23.5, "celsius"), (0x10, 47, "percentage"), (0xC6, 12, nil), (0xC7, 34, nil)]
+        for (code, value, unit) in expectedCharacteristics {
+            let c = try characteristic(code)
+            XCTAssertEqual((c["value"] as? NSNumber)?.doubleValue, value)
+            XCTAssertEqual(c["unit"] as? String, unit)
+            XCTAssertTrue((c["perms"] as! [String]).contains("ev"))
+        }
+        XCTAssertEqual((try characteristic(0x95)["value"] as? NSNumber)?.intValue, 5)
+        _ = try HomeKitIdentityStorage(backing: backing).prepareDevice()
+        let restarted = try JSONSerialization.jsonObject(with: XCTUnwrap(backing.load())) as! NSDictionary
+        XCTAssertEqual(restarted["number"] as? NSNumber, updated["number"] as? NSNumber)
+    }
+
+    func testFailedResumeRequiresFreshInputAfterRetry() async throws {
+        let backing = MemoryHomeKitIdentity()
+        let discovery = FakeHomeKitBonjourMonitor()
+        let server = HomeKitTemperatureServer(backing: backing, discovery: discovery)
+        var status = HomeKitTemperatureStatus()
+        server.onStatus = { status = $0 }
+        defer { server.stop() }
+        func waitFor(_ state: HomeKitTemperatureStatus.State) async throws {
+            for _ in 0..<600 {
+                if status.state == state { return }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTFail("Expected \(state), got \(status.state)")
+        }
+        server.start()
+        try await waitFor(.waiting)
+        let now = Date()
+        let fresh = sensorSnapshot(SensorReading(value: 23, receivedAt: now))
+        server.update(fresh, connected: true, now: now)
+        try await waitFor(.advertising)
+        discovery.finish(error: nil)
+        server.update(DysonSnapshot(), connected: false, now: now)
+        try await waitFor(.waiting)
+        backing.failSave = true
+        server.update(fresh, connected: true, now: now)
+        try await waitFor(.failed)
+        backing.failSave = false
+        server.start()
+        try await waitFor(.waiting)
+        XCTAssertNil(status.readings)
+        server.update(fresh, connected: true, now: now)
+        try await waitFor(.advertising)
+    }
+
+    func testGasExpiryRecalculatesPublishedQualityWithoutNewMessages() async throws {
+        let discovery = FakeHomeKitBonjourMonitor()
+        let server = HomeKitTemperatureServer(backing: MemoryHomeKitIdentity(), discovery: discovery)
+        var status = HomeKitTemperatureStatus()
+        server.onStatus = { status = $0 }
+        defer { server.stop() }
+        server.start()
+        let now = Date()
+        var snapshot = sensorSnapshot(SensorReading(value: 23, receivedAt: now))
+        snapshot.voc = SensorReading(value: 9, receivedAt: now.addingTimeInterval(-117))
+        server.update(snapshot, connected: true, now: now)
+        for _ in 0..<600 {
+            if status.state == .advertising { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(status.readings?.quality, 4)
+        discovery.finish(error: nil)
+        for _ in 0..<600 {
+            if status.readings?.quality == 1 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(status.state, .awaitingPairing)
+        XCTAssertEqual(status.readings?.quality, 1)
+        XCTAssertEqual(status.readings?.temperature, 23)
+        XCTAssertEqual(discovery.starts, 1)
+    }
+
+    func testTemperatureValidityAndFreshnessBoundaries() {
+        let date = Date(timeIntervalSince1970: 1000)
+        let reading = SensorReading(value: 20, receivedAt: date)
+        XCTAssertEqual(HomeKitTemperatureServer.validTemperature(reading, connected: true, now: date.addingTimeInterval(119)), 20)
+        XCTAssertNil(HomeKitTemperatureServer.validTemperature(reading, connected: true, now: date.addingTimeInterval(120)))
+        XCTAssertNil(HomeKitTemperatureServer.validTemperature(reading, connected: false, now: date))
+        XCTAssertNil(HomeKitTemperatureServer.validTemperature(reading, connected: true, now: date.addingTimeInterval(-1)))
+        for value in [Double.nan, .infinity, -0.1, 100.1] {
+            XCTAssertNil(HomeKitTemperatureServer.validTemperature(SensorReading(value: value, receivedAt: date), connected: true, now: date))
+        }
+        XCTAssertNil(HomeKitTemperatureServer.validTemperature(nil, connected: true, now: date))
+        XCTAssertNil(HomeKitTemperatureServer.validTemperature(SensorReading(value: nil, receivedAt: date), connected: true, now: date))
+        for value in [0.0, 100.0] {
+            XCTAssertEqual(HomeKitTemperatureServer.validTemperature(SensorReading(value: value, receivedAt: date), connected: true, now: date), value)
+        }
+    }
+    func testIdentitySurvivesRestartAndExplicitResetReplacesIt() throws {
+        let backing = MemoryHomeKitIdentity()
+        _ = try HomeKitIdentityStorage(backing: backing).prepareDevice()
+        let first = try XCTUnwrap(backing.load())
+        _ = try HomeKitIdentityStorage(backing: backing).prepareDevice()
+        let second = try XCTUnwrap(backing.load())
+        let a = try JSONSerialization.jsonObject(with: first) as! NSDictionary
+        let b = try JSONSerialization.jsonObject(with: second) as! NSDictionary
+        for key in ["identifier", "privateKey", "setupCode", "setupKey", "aidForAccessorySerialNumber"] {
+            XCTAssertEqual(a[key] as? NSObject, b[key] as? NSObject)
+        }
+        try backing.delete()
+        _ = try HomeKitIdentityStorage(backing: backing).prepareDevice()
+        let reset = try JSONSerialization.jsonObject(with: XCTUnwrap(backing.load())) as! NSDictionary
+        XCTAssertNotEqual(a["identifier"] as? String, reset["identifier"] as? String)
+        XCTAssertNotEqual(a["privateKey"] as? String, reset["privateKey"] as? String)
+    }
+    func testLocalServerLifecycleWithSyntheticStorage() async throws {
+        let backing = MemoryHomeKitIdentity()
+        let server = HomeKitTemperatureServer(backing: backing)
+        var status = HomeKitTemperatureStatus()
+        server.onStatus = { status = $0 }
+        func waitFor(_ state: HomeKitTemperatureStatus.State) async throws {
+            for _ in 0..<600 {
+                if status.state == state { return }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTFail("Local server did not reach expected state: \(state)")
+        }
+        defer { server.stop() }
+        server.start()
+        try await waitFor(.waiting)
+        XCTAssertNotNil(status.setupCode)
+        let first = try XCTUnwrap(backing.load())
+        let date = Date()
+        server.update(sensorSnapshot(SensorReading(value: 22.5, receivedAt: date)), connected: true, now: date)
+        try await waitFor(.awaitingPairing)
+        server.update(DysonSnapshot(), connected: false, now: Date())
+        try await waitFor(.waiting)
+        server.stop()
+        try await waitFor(.disabled)
+        server.start()
+        try await waitFor(.waiting)
+        let again = try XCTUnwrap(backing.load())
+        let a = try JSONSerialization.jsonObject(with: first) as! NSDictionary
+        let b = try JSONSerialization.jsonObject(with: again) as! NSDictionary
+        XCTAssertEqual(a["identifier"] as? String, b["identifier"] as? String)
+        let recovered = Date()
+        server.update(sensorSnapshot(SensorReading(value: 23, receivedAt: recovered)), connected: true, now: recovered)
+        try await waitFor(.awaitingPairing)
+        server.reset()
+        try await waitFor(.disabled)
+        XCTAssertNil(try backing.load())
+    }
+    func testPairedServerRecoversFromUnavailableAndExpiredReadingsWithoutRestart() async throws {
+        let backing = MemoryHomeKitIdentity()
+        _ = try HomeKitIdentityStorage(backing: backing).prepareDevice()
+        var saved = try JSONSerialization.jsonObject(with: XCTUnwrap(backing.load())) as! [String: Any]
+        let controller = Data("synthetic-controller".utf8).base64EncodedString()
+        saved["pairings"] = [controller, ["identifier": controller,
+            "publicKey": Data(repeating: 7, count: 32).base64EncodedString(), "role": 1]] as [Any]
+        try backing.save(JSONSerialization.data(withJSONObject: saved))
+        let original = try JSONSerialization.jsonObject(with: XCTUnwrap(backing.load())) as! NSDictionary
+        let discovery = FakeHomeKitBonjourMonitor()
+        let server = HomeKitTemperatureServer(backing: backing, discovery: discovery)
+        var status = HomeKitTemperatureStatus()
+        var waits = 0
+        server.onStatus = { status = $0; if $0.state == .waiting { waits += 1 } }
+        defer { server.stop() }
+        func waitFor(_ state: HomeKitTemperatureStatus.State) async throws {
+            for _ in 0..<600 {
+                if status.state == state { return }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTFail("Expected \(state), got \(status.state)")
+        }
+        server.start()
+        try await waitFor(.waiting)
+        let initial = Date()
+        server.update(sensorSnapshot(SensorReading(value: 22, receivedAt: initial)), connected: true, now: initial)
+        try await waitFor(.advertising)
+        discovery.finish(error: nil)
+        XCTAssertEqual(status.state, .paired)
+        for cause in 0..<7 {
+            let now = Date()
+            let unavailable: SensorReading? = cause == 2
+                ? SensorReading(value: 22, receivedAt: now.addingTimeInterval(-120))
+                : (cause == 3 ? SensorReading(value: 101, receivedAt: now) : nil)
+            let previousWaits = waits
+            // Queue loss and recovery together: do not allow callbacks to release the old
+            // server first, and do not mask recovery with a stop/start of the integration.
+            var lost = cause < 4 ? sensorSnapshot(unavailable) : sensorSnapshot(SensorReading(value: 23, receivedAt: now))
+            if cause == 4 { lost.humidity = nil }
+            if cause == 5 { lost.pm25 = nil }
+            if cause == 6 { lost.pm10 = nil }
+            server.update(lost, connected: cause != 0, now: now)
+            server.update(sensorSnapshot(SensorReading(value: 23, receivedAt: now)), connected: true, now: now)
+            try await waitFor(.advertising)
+            XCTAssertGreaterThan(waits, previousWaits)
+            discovery.finish(error: nil)
+            XCTAssertEqual(status.state, .paired)
+        }
+        // Expire while no new messages arrive, then restore a real fresh reading.
+        let expiryStart = Date()
+        server.update(sensorSnapshot(SensorReading(value: 23, receivedAt: expiryStart.addingTimeInterval(-118))), connected: true, now: expiryStart)
+        try await waitFor(.waiting)
+        let recovered = Date()
+        server.update(sensorSnapshot(SensorReading(value: 24, receivedAt: recovered)), connected: true, now: recovered)
+        try await waitFor(.advertising)
+        discovery.finish(error: nil)
+        XCTAssertEqual(status.state, .paired)
+        let restored = try JSONSerialization.jsonObject(with: XCTUnwrap(backing.load())) as! NSDictionary
+        for key in ["identifier", "privateKey", "setupCode", "setupKey", "pairings", "aidForAccessorySerialNumber"] {
+            XCTAssertEqual(original[key] as? NSObject, restored[key] as? NSObject)
+        }
+    }
+
+    func testLocalServerIsActuallyDiscoverableThroughBonjour() async throws {
+        let backing = MemoryHomeKitIdentity()
+        _ = try HomeKitIdentityStorage(backing: backing).prepareDevice()
+        let object = try JSONSerialization.jsonObject(with: XCTUnwrap(backing.load())) as! [String: Any]
+        let probe = HomeKitBonjourProbe(identifier: try XCTUnwrap(object["identifier"] as? String))
+        let server = HomeKitTemperatureServer(backing: backing)
+        defer { probe.stop(); server.stop() }
+        probe.start(); server.start()
+        let date = Date()
+        server.update(sensorSnapshot(SensorReading(value: 22, receivedAt: date)), connected: true, now: date)
+        for _ in 0..<600 {
+            if probe.found { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(probe.found, "A listening socket alone does not prove Bonjour publication")
+    }
+    func testReadyRequiresSuccessfulBonjourDiscoveryAndFailureCanBeRetried() async throws {
+        let backing = MemoryHomeKitIdentity()
+        let discovery = FakeHomeKitBonjourMonitor()
+        let server = HomeKitTemperatureServer(backing: backing, discovery: discovery)
+        var status = HomeKitTemperatureStatus()
+        server.onStatus = { status = $0 }
+        defer { server.stop() }
+        func waitFor(_ state: HomeKitTemperatureStatus.State) async throws {
+            for _ in 0..<600 {
+                if status.state == state { return }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTFail("Expected status: \(state)")
+        }
+        server.start()
+        let date = Date()
+        server.update(sensorSnapshot(SensorReading(value: 22, receivedAt: date)), connected: true, now: date)
+        try await waitFor(.advertising)
+        XCTAssertNotNil(status.setupURI)
+        XCTAssertEqual(discovery.starts, 1)
+        discovery.finish(error: "Local network discovery is unavailable.")
+        XCTAssertEqual(status.state, .failed)
+        server.update(sensorSnapshot(SensorReading(value: 22, receivedAt: date)), connected: true, now: Date())
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(status.state, .failed, "Sensor updates must not mask a discovery error")
+        XCTAssertEqual(discovery.starts, 1)
+        server.stop()
+        try await waitFor(.disabled)
+        server.start()
+        let retry = Date()
+        server.update(sensorSnapshot(SensorReading(value: 22, receivedAt: retry)), connected: true, now: retry)
+        try await waitFor(.advertising)
+        XCTAssertEqual(discovery.starts, 2)
+        discovery.finish(error: nil)
+        XCTAssertEqual(status.state, .awaitingPairing)
+        XCTAssertNil(status.error)
+    }
+    func testQRCodeDecodesToPersistedHAPSetupURI() throws {
+        let backing = MemoryHomeKitIdentity()
+        let (device, _) = try HomeKitIdentityStorage(backing: backing).prepareDevice()
+        let uri = device.setupURI
+        let image = try XCTUnwrap(HomeKitPairingQRCode.image(for: uri))
+        let detector = try XCTUnwrap(CIDetector(ofType: CIDetectorTypeQRCode, context: CIContext(),
+                                              options: [CIDetectorAccuracy: CIDetectorAccuracyHigh]))
+        let features = detector.features(in: CIImage(cgImage: image)).compactMap { $0 as? CIQRCodeFeature }
+        XCTAssertEqual(features.first?.messageString, uri)
+        let (restarted, _) = try HomeKitIdentityStorage(backing: backing).prepareDevice()
+        XCTAssertEqual(restarted.setupURI, uri)
+        for invalid in ["", "https://example.com", "X-HM://invalid", "X-HM://000000000AB?D"] {
+            XCTAssertNil(HomeKitPairingQRCode.image(for: invalid))
+        }
+    }
+    func testControllerPairingSurvivesRestart() throws {
+        let backing = MemoryHomeKitIdentity()
+        _ = try HomeKitIdentityStorage(backing: backing).prepareDevice()
+        var object = try JSONSerialization.jsonObject(with: XCTUnwrap(backing.load())) as! [String: Any]
+        let identifier = Data("synthetic-controller".utf8).base64EncodedString()
+        object["pairings"] = [identifier, ["identifier": identifier,
+                                         "publicKey": Data(repeating: 7, count: 32).base64EncodedString(), "role": 1]] as [Any]
+        try backing.save(JSONSerialization.data(withJSONObject: object))
+        let original = try backing.load()
+        let (device, _) = try HomeKitIdentityStorage(backing: backing).prepareDevice()
+        XCTAssertTrue(device.isPaired)
+        let before = try JSONSerialization.jsonObject(with: XCTUnwrap(original)) as! NSDictionary
+        let after = try JSONSerialization.jsonObject(with: XCTUnwrap(backing.load())) as! NSDictionary
+        XCTAssertEqual(before["pairings"] as? NSObject, after["pairings"] as? NSObject)
+    }
+    func testCorruptIdentityIsNeverOverwritten() throws {
+        let backing = MemoryHomeKitIdentity()
+        let corrupt = Data(#"{"identifier":"existing-identity"}"#.utf8)
+        try backing.save(corrupt)
+        XCTAssertThrowsError(try HomeKitIdentityStorage(backing: backing).prepareDevice())
+        XCTAssertEqual(try backing.load(), corrupt)
+        XCTAssertEqual(backing.saves, 1)
+    }
+    func testStorageFailuresDoNotSilentlyGenerateIdentity() throws {
+        let backing = MemoryHomeKitIdentity()
+        backing.failLoad = true
+        XCTAssertThrowsError(try HomeKitIdentityStorage(backing: backing))
+        XCTAssertEqual(backing.saves, 0)
+        backing.failLoad = false; backing.failSave = true
+        XCTAssertThrowsError(try HomeKitIdentityStorage(backing: backing).prepareDevice())
+        XCTAssertNil(try backing.load())
+    }
+    func testArmedPairingStorageReportsWriteFailureWithoutReplacingStoredData() throws {
+        let backing = MemoryHomeKitIdentity()
+        let storage = try HomeKitIdentityStorage(backing: backing)
+        _ = try storage.prepareDevice()
+        let original = try backing.load()
+        backing.failSave = true
+        XCTAssertThrowsError(try storage.write(Data("uncommitted".utf8)))
+        XCTAssertEqual(try backing.load(), original)
+        XCTAssertEqual(try storage.read(), original)
+    }
+    func testStatusDeliveryAndDisabledStateDoNotExposeSetupCode() {
+        let (store, _, server, _, _) = fixture()
+        store.setHomeKitTemperatureEnabled(true)
+        server.onStatus?(HomeKitTemperatureStatus(state: .awaitingPairing, setupCode: "248-36-579"))
+        XCTAssertEqual(store.homeKitStatus.state, .awaitingPairing)
+        server.onStatus?(HomeKitTemperatureStatus(state: .paired, isPaired: true))
+        XCTAssertTrue(store.homeKitStatus.isPaired); XCTAssertNil(store.homeKitStatus.setupCode)
+        store.setHomeKitTemperatureEnabled(false)
+        server.onStatus?(HomeKitTemperatureStatus(state: .awaitingPairing, setupCode: "248-36-579"))
+        XCTAssertEqual(store.homeKitStatus.state, .disabled); XCTAssertNil(store.homeKitStatus.setupCode)
     }
 }

@@ -9,7 +9,12 @@ struct HueConfiguration: Codable, Equatable, Sendable {
     var selectedSceneIDs: [String]? = nil
 }
 struct DysonConfiguration: Codable, Equatable, Sendable { var host: String; var serial: String; var topicPrefix: String; var name: String }
-struct SavedConfiguration: Codable { var hue: HueConfiguration?; var dyson: DysonConfiguration? }
+struct SavedConfiguration: Codable {
+    var hue: HueConfiguration?
+    var dyson: DysonConfiguration?
+    // Optional for compatibility with configurations written before Apple Home support.
+    var homeKitTemperatureEnabled: Bool? = nil
+}
 struct HueLight: Identifiable, Equatable, Sendable {
     var id: String; var name: String; var isOn: Bool; var brightness: Double?; var reachable: Bool
     var archetype: String = "unknown_archetype"
