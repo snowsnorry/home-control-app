@@ -8,7 +8,7 @@ struct HomeKitTemperatureSettings: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Divider()
-            Text("Apple Home · Experimental").font(.headline)
+            Text("Apple Home").font(.headline)
             Toggle("Share data with Apple Home", isOn: Binding(
                 get: { store.configuration.homeKitTemperatureEnabled == true },
                 set: { store.setHomeKitTemperatureEnabled($0) }))
@@ -33,8 +33,6 @@ struct HomeKitTemperatureSettings: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Text("Your Mac and iPhone must be on the same local network. Sharing requires Home Control to be running and your Mac to be awake. The accessory requires fresh temperature, humidity, PM2.5 and PM10 readings. If any reading is unavailable or 120 seconds old, all shared readings become unavailable until fresh data returns.")
-                .font(.caption).foregroundStyle(.secondary)
-            Text("Apple Home compatibility has not yet been verified with physical devices.")
                 .font(.caption).foregroundStyle(.secondary)
             if let error = store.homeKitStatus.error { ErrorNotice(message: String(localized: String.LocalizationValue(error))) }
             if store.configuration.homeKitTemperatureEnabled == true {

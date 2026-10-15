@@ -2,6 +2,7 @@ import Foundation
 import Observation
 
 @MainActor @Observable final class ConnectionWizard {
+    var showsGeneral = true
     var selected: DeviceKind = .hue
     var hueHost = ""
     var bridgeID: String?
@@ -27,7 +28,7 @@ import Observation
     @ObservationIgnored private var task: Task<Void, Never>?
     init(cloud: any CloudDysonClientProtocol = MyDysonClient()) { self.cloud = cloud }
     func begin(_ kind: DeviceKind) {
-        cancel(); selected = kind; active = true; discovery.start(kind: kind)
+        cancel(); showsGeneral = false; selected = kind; active = true; discovery.start(kind: kind)
     }
     func cancel() {
         task?.cancel(); task = nil; discovery.stop(); cloud.reset()

@@ -39,6 +39,8 @@ Open `HomeControl.xcodeproj`, select the **HomeControl** scheme and run. Xcode r
 
 The house icon appears in the menu bar without a Dock icon. Left-click opens the device panel. Right-click offers **Settings…** and **Quit**. **Connect** opens settings at the chosen integration. Debug builds support the `--show-settings` launch argument for inspection.
 
+**Settings → General → Launch at login** controls automatic startup when you log in to your Mac using macOS Service Management. The switch reflects the system registration, including changes made in System Settings. If approval is required, General offers a shortcut to Login Items settings. Enable this from the installed `/Applications/Home Control.app` so macOS launches the installed copy.
+
 ## Connect
 
 **Hue:** discover a bridge or enter its IP/hostname, continue to verify its identity, press its physical link button, then choose **Connect**. The app retrieves lights, device types, rooms and scenes, and observes Hue's event stream. Lights and smart plugs appear in a two-column grid. Power switches act independently; clicking a dimmable light opens a brightness popover. Changing brightness also turns the light on. Devices without dimming never open a brightness popover.
@@ -65,7 +67,7 @@ All four numeric readings must be finite, less than 120 seconds old and not date
 
 Accessory identity, setup code, private keys and controller pairings are saved together in this app's Keychain under a separate account. Disabling sharing, restarting, network recovery and removal of the Dyson connection preserve the pairing. Removing Dyson disables sharing; reconnecting requires enabling it again. **Reset Apple Home Pairing…** explicitly disables sharing and deletes the saved identity. Remove the old accessory from Home before enabling sharing and adding it again. Storage errors stop publication and do not silently replace existing pairing keys.
 
-Temperature, humidity, air quality, PM2.5 and PM10 have been verified in the macOS Home app with a real Dyson and an existing pairing. Sleep/wake, extended outages and explicit reset still need full hardware acceptance. Hardware acceptance: add the accessory and compare its temperature with the app, restart Home Control without re-adding it, disable/re-enable sharing, sleep/wake the Mac, disconnect/reconnect the network and Dyson, check unavailability after 120 seconds without a valid reading, and verify explicit reset requires a new pairing. The temperature-only accessory upgrades in place: existing temperature IIDs, accessory identity and controller pairings are preserved, with a single HAP configuration-number increment for the added services. The existing Home accessory displayed humidity, both particle densities and mapped air quality after updating without re-pairing. Purifier control, history and automatic launch are outside this experiment.
+Temperature, humidity, air quality, PM2.5 and PM10 have been verified in the macOS Home app with a real Dyson and an existing pairing. Sleep/wake, extended outages and explicit reset still need full hardware acceptance. Hardware acceptance: add the accessory and compare its temperature with the app, restart Home Control without re-adding it, disable/re-enable sharing, sleep/wake the Mac, disconnect/reconnect the network and Dyson, check unavailability after 120 seconds without a valid reading, and verify explicit reset requires a new pairing. The temperature-only accessory upgrades in place: existing temperature IIDs, accessory identity and controller pairings are preserved, with a single HAP configuration-number increment for the added services. The existing Home accessory displayed humidity, both particle densities and mapped air quality after updating without re-pairing. Purifier control and history are outside this experiment.
 
 ## Validation
 
@@ -123,6 +125,6 @@ CocoaMQTT is pinned at **2.1.6**, with transitive revisions recorded in Xcode's 
 - [MyDyson protocol reference](https://github.com/libdyson-wg/libdyson-neon/tree/main/libdyson/cloud)
 - [CocoaMQTT](https://github.com/emqx/CocoaMQTT)
 
-No cloud control, schedules, light colors/scenes, historical measurements, login item or distribution/notarization setup is included.
+No cloud control, schedules, light colors/scenes, historical measurements or distribution/notarization setup is included.
 
 For isolated Bonjour troubleshooting, launch the GUI bundle with `open -n "/Applications/Home Control.app" --args --diagnose-bonjour`. This eight-second diagnostic compares Foundation and Network discovery without reading configuration or Keychain. It logs only service types, counts and errors under the `BonjourDiagnostic` category; it never reads or prints pairing codes.

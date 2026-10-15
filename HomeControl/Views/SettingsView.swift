@@ -1,4 +1,5 @@
 import SwiftUI
+import ServiceManagement
 
 struct SettingsView: View {
     var store: HomeStore
@@ -6,33 +7,47 @@ struct SettingsView: View {
     var body: some View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
+                Button {
+                    wizard.cancel(); wizard.showsGeneral = true
+                } label: {
+                    Label("General", systemImage: "gearshape")
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(8)
+                        .background(wizard.showsGeneral ? Color.accentColor.opacity(0.14) : .clear, in: RoundedRectangle(cornerRadius: 6))
+                }.buttonStyle(.plain)
+                Divider().padding(.vertical, 8)
                 Text("Devices").font(.caption).foregroundStyle(.secondary).padding(.bottom, 8)
                 ForEach(DeviceKind.allCases) { kind in
                     Button {
-                        wizard.cancel(); wizard.selected = kind
+                        wizard.cancel(); wizard.showsGeneral = false; wizard.selected = kind
                     } label: {
                         Label(kind == .hue ? "Philips Hue" : "Dyson TP07", systemImage: kind == .hue ? "lightbulb" : "fan")
                             .frame(maxWidth: .infinity, alignment: .leading).padding(8)
-                            .background(wizard.selected == kind ? Color.accentColor.opacity(0.14) : .clear, in: RoundedRectangle(cornerRadius: 6))
+                            .background(!wizard.showsGeneral && wizard.selected == kind ? Color.accentColor.opacity(0.14) : .clear, in: RoundedRectangle(cornerRadius: 6))
                     }.buttonStyle(.plain)
                 }
                 Spacer()
                 Text("Home Control").font(.caption).foregroundStyle(.secondary)
-            }.padding().frame(width: 165).background(.regularMaterial)
+            }
+            .labelStyle(SettingsSidebarLabelStyle())
+            .padding().frame(width: 165).background(.regularMaterial)
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    Text(wizard.selected == .hue ? "Philips Hue" : "Dyson TP07").font(.title2.bold())
-                    if wizard.success && (wizard.selected == .hue ? store.hueState : store.dysonState) == .online { Label("Connected successfully", systemImage: "checkmark.circle.fill").foregroundStyle(.green) }
-                    if !wizard.active { connectionSummary }
-                    else if wizard.selected == .hue { hueWizard }
-                    else { dysonWizard }
-                    if let error = wizard.error { ErrorNotice(message: error) }
-                    if let error = wizard.discovery.error { ErrorNotice(message: error) }
-                    if let error = store.storageError { ErrorNotice(message: error) }
-                    if wizard.busy { ProgressView().controlSize(.small) }
-                    if wizard.active {
-                        Button("Cancel") { wizard.cancel() }.keyboardShortcut(.cancelAction)
+                    if wizard.showsGeneral {
+                        GeneralSettings()
+                    } else {
+                        Text(wizard.selected == .hue ? "Philips Hue" : "Dyson TP07").font(.title2.bold())
+                        if wizard.success && (wizard.selected == .hue ? store.hueState : store.dysonState) == .online { Label("Connected successfully", systemImage: "checkmark.circle.fill").foregroundStyle(.green) }
+                        if !wizard.active { connectionSummary }
+                        else if wizard.selected == .hue { hueWizard }
+                        else { dysonWizard }
+                        if let error = wizard.error { ErrorNotice(message: error) }
+                        if let error = wizard.discovery.error { ErrorNotice(message: error) }
+                        if let error = store.storageError { ErrorNotice(message: error) }
+                        if wizard.busy { ProgressView().controlSize(.small) }
+                        if wizard.active {
+                            Button("Cancel") { wizard.cancel() }.keyboardShortcut(.cancelAction)
+                        }
                     }
                 }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -63,8 +78,6 @@ struct SettingsView: View {
         if let error = wizard.selected == .hue ? store.hueError : store.dysonError { ErrorNotice(message: error) }
         if wizard.selected == .hue, store.configuration.hue != nil { HueSceneSettings(store: store) }
         if wizard.selected == .dyson { HomeKitTemperatureSettings(store: store) }
-        Divider()
-        Text("Device integrations have not yet been verified with your physical devices.").font(.caption).foregroundStyle(.secondary)
     }
     @ViewBuilder private var hueWizard: some View {
         if let configuration = wizard.identifiedHue {
@@ -140,6 +153,80 @@ struct SettingsView: View {
             }
             if wizard.discovery.devices.isEmpty && !wizard.discovery.isSearching {
                 Text("No devices found. You can enter an address manually.").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+private struct SettingsSidebarLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 8) {
+            configuration.icon.frame(width: 20)
+            configuration.title
+        }
+    }
+}
+
+private struct GeneralSettings: View {
+    @State private var status = SMAppService.mainApp.status
+    @State private var busy = false
+    @State private var error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("General").font(.title2.bold())
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Launch at login", isOn: Binding(
+                    get: { status == .enabled },
+                    set: { setEnabled($0) }
+                ))
+                .toggleStyle(.switch)
+                .disabled(busy)
+                Text("Automatically starts Home Control when you log in to your Mac.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if status == .requiresApproval {
+                Text("Allow Home Control to launch at login in System Settings.")
+                    .font(.callout).foregroundStyle(.secondary)
+                Button("Open Login Items Settings…") { SMAppService.openSystemSettingsLoginItems() }
+            }
+            if let error { ErrorNotice(message: error) }
+            if busy { ProgressView().controlSize(.small) }
+        }
+        .onAppear { refreshStatus() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            refreshStatus()
+        }
+    }
+
+    private func refreshStatus() {
+        status = SMAppService.mainApp.status
+    }
+
+    private func setEnabled(_ enabled: Bool) {
+        guard !busy else { return }
+        refreshStatus()
+        error = nil
+        if enabled && status == .requiresApproval {
+            SMAppService.openSystemSettingsLoginItems()
+            return
+        }
+        guard enabled != (status == .enabled) else { return }
+        busy = true
+        Task { @MainActor in
+            defer { refreshStatus(); busy = false }
+            do {
+                if enabled {
+                    try SMAppService.mainApp.register()
+                } else {
+                    try await SMAppService.mainApp.unregister()
+                }
+                refreshStatus()
+                if enabled && status != .enabled && status != .requiresApproval {
+                    self.error = String(localized: "macOS could not confirm launch at login. Try again from the Applications folder.")
+                }
+            } catch {
+                self.error = String(localized: "Could not change launch at login: \(error.localizedDescription)")
             }
         }
     }

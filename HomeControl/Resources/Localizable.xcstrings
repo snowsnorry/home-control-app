@@ -133,13 +133,13 @@
         }
       }
     },
-    "Apple Home · Experimental": {
+    "Apple Home": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Apple Home · Experimental"
+            "value": "Apple Home"
           }
         }
       }
@@ -173,17 +173,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "On your iPhone or iPad, open Home → Add Accessory → More Options, select Dyson Temperature, and enter this code."
-          }
-        }
-      }
-    },
-    "Apple Home compatibility has not yet been verified with physical devices.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Apple Home compatibility has not yet been verified with physical devices."
           }
         }
       }
@@ -690,17 +679,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Device"
-          }
-        }
-      }
-    },
-    "Device integrations have not yet been verified with your physical devices.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Device integrations have not yet been verified with your physical devices."
           }
         }
       }
