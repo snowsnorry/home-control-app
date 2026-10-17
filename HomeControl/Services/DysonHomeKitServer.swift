@@ -2,7 +2,31 @@ import Foundation
 import OSLog
 @preconcurrency import HAP
 
-struct HomeKitTemperatureStatus: Equatable, Sendable {
+enum DysonHomeCommand: Equatable, Sendable {
+    case power(Bool)
+    case automatic(Bool)
+    case speed(Int)
+
+    static func speed(percent: Double) throws -> Self {
+        guard percent.isFinite, (0...100).contains(percent) else { throw HomeKitControlError.invalidValue }
+        return percent == 0 ? .power(false) : .speed(max(1, Int((percent / 10).rounded())))
+    }
+    func fields() throws -> [String: String] {
+        switch self {
+        case .power(let on): return ["fpwr": on ? "ON" : "OFF"]
+        case .automatic(let auto): return ["auto": auto ? "ON" : "OFF"]
+        case .speed(let speed):
+            guard (1...10).contains(speed) else { throw HomeKitControlError.invalidValue }
+            return ["fpwr": "ON", "auto": "OFF", "fnsp": String(format: "%04d", speed)]
+        }
+    }
+}
+
+enum HomeKitControlError: Error, Sendable {
+    case unavailable, invalidValue
+}
+
+struct DysonHomeKitStatus: Equatable, Sendable {
     enum State: String, Sendable {
         case disabled = "Disabled"
         case starting = "Starting…"
@@ -20,6 +44,7 @@ struct HomeKitTemperatureStatus: Equatable, Sendable {
     var discoveryIdentifier: String?
     var error: String?
     var readings: HomeKitAirReadings?
+    var controlAvailable = false
 }
 
 @MainActor protocol HomeKitBonjourMonitoring: AnyObject {
@@ -61,7 +86,7 @@ struct HomeKitTemperatureStatus: Equatable, Sendable {
         completion?(error)
     }
     func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
-        guard browser === self.browser, identifier != nil, service.name.hasPrefix("Dyson Temperature") else { return }
+        guard browser === self.browser, identifier != nil else { return }
         services.append(service); service.delegate = self
         service.resolve(withTimeout: 5)
     }
@@ -116,15 +141,48 @@ struct HomeKitAirReadings: Equatable, Sendable {
 }
 
 /// Append services to preserve every existing temperature-service IID and the sensor category.
-final class HomeKitAirAccessory: HAP.Accessory.Thermometer {
+final class DysonHomeKitAccessory: HAP.Accessory.Thermometer, HAP.AccessoryDelegate {
     let humiditySensor = HAP.Service.HumiditySensor()
     // PM characteristic types define µg/m³. Omit Bouke/HAP's nonstandard unit token.
     let airQualitySensor = HAP.Service.AirQualitySensor(characteristics: [.pm25Density(unit: nil), .pm10Density(unit: nil)])
-    init() {
-        super.init(info: HAP.Service.Info(name: "Dyson Temperature", serialNumber: "homecontrol-temperature",
-            manufacturer: "Home Control", model: "Dyson Temperature"),
-            additionalServices: [humiditySensor, airQualitySensor])
+    let purifier = HAP.Service.AirPurifier(characteristics: [.rotationSpeed(minStep: 10)])
+    private let control: (@Sendable (DysonHomeCommand) -> Void)?
+    private var confirmedControl: DysonSnapshot?
+    init(control: (@Sendable (DysonHomeCommand) -> Void)? = nil) {
+        self.control = control
+        super.init(info: HAP.Service.Info(name: "Dyson TP07", serialNumber: "homecontrol-temperature",
+            manufacturer: "Home Control", model: "Dyson TP07"),
+            additionalServices: [humiditySensor, airQualitySensor, purifier])
         reachable = false
+        delegate = self
+    }
+    /// Upstream HAP accepts a write before invoking this delegate. Forward it to
+    /// our command queue; later snapshots or reconciliation publish actual state.
+    func characteristic<T>(_ characteristic: HAP.GenericCharacteristic<T>, ofService service: HAP.Service,
+                           ofAccessory accessory: HAP.Accessory, didChangeValue value: T?) {
+        guard accessory === self, service === purifier else { return }
+        let command: DysonHomeCommand?
+        if characteristic === purifier.active, let active = value as? HAP.Enums.Active {
+            command = .power(active == .active)
+        } else if characteristic === purifier.targetAirPurifierState, let mode = value as? HAP.Enums.TargetAirPurifierState {
+            command = .automatic(mode == .auto)
+        } else if characteristic === purifier.rotationSpeed, let speed = value as? Float {
+            command = try? .speed(percent: Double(speed))
+        } else { command = nil }
+        guard reachable, let control, let command else {
+            if let confirmedControl { applyControl(confirmedControl, connected: true) }
+            return
+        }
+        control(command)
+    }
+    func applyControl(_ snapshot: DysonSnapshot, connected: Bool) {
+        guard connected, snapshot.hasState else { return }
+        confirmedControl = snapshot
+        purifier.active.value = snapshot.isOn ? .active : .inactive
+        purifier.targetAirPurifierState.value = snapshot.autoMode ? .auto : .manual
+        // A missing manual setpoint in Auto is not evidence that the fan is idle.
+        purifier.currentAirPurifierState.value = snapshot.isOn ? .purifyingAir : .inactive
+        purifier.rotationSpeed?.value = snapshot.isOn ? Float((snapshot.speed ?? 0) * 10) : 0
     }
     func apply(_ values: HomeKitAirReadings) {
         temperatureSensor.currentTemperature.value = Float(values.temperature)
@@ -135,8 +193,9 @@ final class HomeKitAirAccessory: HAP.Accessory.Thermometer {
     }
 }
 
-@MainActor protocol HomeKitTemperatureServerProtocol: AnyObject {
-    var onStatus: (@MainActor (HomeKitTemperatureStatus) -> Void)? { get set }
+@MainActor protocol DysonHomeKitServerProtocol: AnyObject {
+    var onStatus: (@MainActor (DysonHomeKitStatus) -> Void)? { get set }
+    var onControl: (@MainActor (DysonHomeCommand) async throws -> Void)? { get set }
     func start()
     func update(_ snapshot: DysonSnapshot, connected: Bool, now: Date)
     func stop()
@@ -151,6 +210,7 @@ protocol HomeKitSecretStorage: Sendable {
 }
 
 struct HomeKitKeychainStorage: HomeKitSecretStorage {
+    // Keep the original Keychain account so existing pairing keys remain accessible.
     private static let account = "homekit-temperature"
     func load() throws -> Data? {
         guard let value = try KeychainStore().read(Self.account) else { return nil }
@@ -189,11 +249,11 @@ final class HomeKitIdentityStorage: HAP.Storage, @unchecked Sendable {
             throw HomeKitStorageError.missingConfiguration
         }
     }
-    func prepareDevice() throws -> (HAP.Device, HomeKitAirAccessory) {
+    func prepareDevice(control: (@Sendable (DysonHomeCommand) -> Void)? = nil) throws -> (HAP.Device, DysonHomeKitAccessory) {
         let original = try read()
         // Preserve serial, existing service order, and keys when expanding the service graph.
-        let thermometer = HomeKitAirAccessory()
-        let device = HAP.Device(storage: self, accessory: thermometer)
+        let accessory = DysonHomeKitAccessory(control: control)
+        let device = HAP.Device(storage: self, accessory: accessory)
         let updated = try read()
         if !original.isEmpty {
             let keys = ["identifier", "privateKey", "setupCode", "setupKey", "pairings"]
@@ -207,20 +267,20 @@ final class HomeKitIdentityStorage: HAP.Storage, @unchecked Sendable {
         guard !updated.isEmpty else { throw HomeKitStorageError.missingConfiguration }
         try backing.save(updated)
         lock.withLock { armed = true }
-        return (device, thermometer)
+        return (device, accessory)
     }
 }
 
-/// The dedicated thread owns HAP and its Bonjour run loop; no socket startup or shutdown blocks UI.
-/// HAP's internal request handlers retain their own main-queue dispatches.
-private final class HomeKitTemperatureWorker: NSObject, HAP.DeviceDelegate, @unchecked Sendable {
-    enum Command { case start, update(DysonSnapshot, Bool, Date), stop, reset, report }
+/// The worker owns server lifecycle and Bonjour. Characteristic reads, writes and
+/// publication run on main; socket startup/shutdown never block the UI.
+private final class DysonHomeKitWorker: NSObject, HAP.DeviceDelegate, @unchecked Sendable {
+    enum Command { case start(UUID), update(DysonSnapshot, Bool, Date, UUID), stop, reset, report, reconcile(UUID) }
     private let commandsLock = NSLock()
     private var commands: [Command] = []
     private var thread: Thread?
     private var enabled = false
     private var device: HAP.Device?
-    private var thermometer: HomeKitAirAccessory?
+    private var accessory: DysonHomeKitAccessory?
     private var server: HAP.Server?
     private var needsDeviceRefresh = false
     private var storage: HomeKitIdentityStorage?
@@ -229,13 +289,17 @@ private final class HomeKitTemperatureWorker: NSObject, HAP.DeviceDelegate, @unc
     private var sourceNow: Date?
     private var wallAnchor: Date?
     private var values: HomeKitAirReadings?
+    private var publishedSnapshot: DysonSnapshot?
+    private var publishedConnected = false
     private var discoveryIdentifier: String?
     private var storageFailed = false
     private let backing: any HomeKitSecretStorage
-    private let emit: @Sendable (HomeKitTemperatureStatus) -> Void
+    private let emit: @Sendable (DysonHomeKitStatus) -> Void
+    private let control: @Sendable (DysonHomeCommand, UUID) -> Void
+    private var controlEpoch = UUID()
 
-    init(backing: any HomeKitSecretStorage, emit: @escaping @Sendable (HomeKitTemperatureStatus) -> Void) {
-        self.backing = backing; self.emit = emit
+    init(backing: any HomeKitSecretStorage, control: @escaping @Sendable (DysonHomeCommand, UUID) -> Void, emit: @escaping @Sendable (DysonHomeKitStatus) -> Void) {
+        self.backing = backing; self.control = control; self.emit = emit
     }
     func enqueue(_ command: Command) {
         commandsLock.withLock {
@@ -277,17 +341,18 @@ private final class HomeKitTemperatureWorker: NSObject, HAP.DeviceDelegate, @unc
     }
     private func handle(_ command: Command) {
         switch command {
-        case .start:
+        case .start(let epoch):
             guard !enabled else { return }
+            controlEpoch = epoch
             enabled = true
-            emit(HomeKitTemperatureStatus(state: .starting))
+            emit(DysonHomeKitStatus(state: .starting))
             do {
                 let storage = try HomeKitIdentityStorage(backing: backing)
-                let (device, thermometer) = try storage.prepareDevice()
+                let (device, accessory) = try storage.prepareDevice(control: controlHandler())
                 storage.onFailure = { [weak self] in
                     self?.commandsLock.withLock { self?.storageFailed = true }
                 }
-                self.storage = storage; self.device = device; self.thermometer = thermometer
+                self.storage = storage; self.device = device; self.accessory = accessory
                 needsDeviceRefresh = false
                 let configuration = try JSONSerialization.jsonObject(with: storage.read()) as? [String: Any]
                 guard let identifier = configuration?["identifier"] as? String else { throw HomeKitStorageError.invalidIdentity }
@@ -296,22 +361,30 @@ private final class HomeKitTemperatureWorker: NSObject, HAP.DeviceDelegate, @unc
                 try publishIfFresh()
                 report()
             } catch { fail("Apple Home pairing data could not be loaded or saved. Retry, or reset pairing explicitly.") }
-        case .update(let snapshot, let connected, let now):
+        case .update(let snapshot, let connected, let now, let epoch):
+            let epochChanged = controlEpoch != epoch
+            controlEpoch = epoch
             self.snapshot = snapshot; self.connected = connected
             sourceNow = now; wallAnchor = Date()
             guard enabled, device != nil else { return }
-            do { try refreshPublication() }
+            if epochChanged { pauseServer(); needsDeviceRefresh = true }
+            do { try refreshPublication(force: epochChanged) }
             catch { fail("Apple Home could not start its local server. Disable and enable sharing to retry.") }
         case .stop:
-            enabled = false; pauseServer(); snapshot = nil; values = nil; sourceNow = nil; wallAnchor = nil
-            device = nil; thermometer = nil; storage = nil
-            emit(HomeKitTemperatureStatus())
+            enabled = false; pauseServer(); snapshot = nil; publishedSnapshot = nil; values = nil; sourceNow = nil; wallAnchor = nil
+            device = nil; accessory = nil; storage = nil
+            emit(DysonHomeKitStatus())
+        case .reconcile(let epoch):
+            guard enabled, controlEpoch == epoch else { return }
+            // Restore the latest Dyson state even if no new sensor values arrived.
+            do { try refreshPublication(force: true) }
+            catch { fail("Apple Home could not start its local server. Disable and enable sharing to retry.") }
         case .report:
             report()
         case .reset:
-            enabled = false; pauseServer(); snapshot = nil; values = nil; sourceNow = nil; wallAnchor = nil
-            device = nil; thermometer = nil; storage = nil
-            do { try backing.delete(); emit(HomeKitTemperatureStatus()) }
+            enabled = false; pauseServer(); snapshot = nil; publishedSnapshot = nil; values = nil; sourceNow = nil; wallAnchor = nil
+            device = nil; accessory = nil; storage = nil
+            do { try backing.delete(); emit(DysonHomeKitStatus()) }
             catch { fail("Apple Home pairing data could not be removed. Retry resetting pairing.") }
         }
         if commandsLock.withLock({ storageFailed }) {
@@ -319,36 +392,43 @@ private final class HomeKitTemperatureWorker: NSObject, HAP.DeviceDelegate, @unc
             fail("Apple Home pairing data could not be saved. Sharing has stopped; retry before adding the accessory.")
         }
     }
-    private func refreshPublication() throws {
+    private func controlHandler() -> @Sendable (DysonHomeCommand) -> Void {
+        let epoch = controlEpoch, send = control
+        return { command in send(command, epoch) }
+    }
+    private func refreshPublication(force: Bool = false) throws {
         guard let snapshot, let sourceNow, let wallAnchor else { return }
         // Translate the injected clock into wall-clock elapsed time, including sleep.
         let now = sourceNow.addingTimeInterval(max(0, Date().timeIntervalSince(wallAnchor)))
         let fresh = HomeKitAirReadings.make(snapshot, connected: connected, now: now)
-        guard fresh != values else { return }
-        values = fresh
+        guard force || fresh != values || snapshot != publishedSnapshot || connected != publishedConnected else { return }
+        values = fresh; publishedSnapshot = snapshot; publishedConnected = connected
         try publishIfFresh()
         report()
     }
     private func publishIfFresh() throws {
-        guard let values else { pauseServer(); return }
+        guard let snapshot, let values, connected else { pauseServer(); return }
         if server == nil, needsDeviceRefresh {
             // HAP.stop() does not detach Device.server. Bonjour callbacks or clients may
             // retain the stopped Server, so reuse can trap in the next Server.init.
             // Rebuild the object graph from saved keys, preserving the accessory identity.
             guard let storage else { throw HomeKitStorageError.missingConfiguration }
-            let (replacement, sensor) = try storage.prepareDevice()
+            let (replacement, replacementAccessory) = try storage.prepareDevice(control: controlHandler())
             device?.delegate = nil
             replacement.delegate = self
-            device = replacement; thermometer = sensor
+            device = replacement; accessory = replacementAccessory
             needsDeviceRefresh = false
         }
-        guard let thermometer, let device else { throw HomeKitStorageError.missingConfiguration }
-        thermometer.apply(values)
-        thermometer.reachable = true
+        guard let accessory, let device else { throw HomeKitStorageError.missingConfiguration }
+        DispatchQueue.main.sync {
+            accessory.reachable = true
+            accessory.apply(values)
+            accessory.applyControl(snapshot, connected: connected)
+        }
         if server == nil { server = try HAP.Server(device: device) }
     }
     private func pauseServer() {
-        thermometer?.reachable = false
+        DispatchQueue.main.sync { accessory?.reachable = false }
         guard let server else { return }
         try? server.stop()
         self.server = nil
@@ -356,17 +436,18 @@ private final class HomeKitTemperatureWorker: NSObject, HAP.DeviceDelegate, @unc
     }
     private func report() {
         guard enabled, let device else { return }
-        emit(HomeKitTemperatureStatus(
+        emit(DysonHomeKitStatus(
             state: server == nil ? .waiting : (device.isPaired ? .paired : .awaitingPairing),
             isPaired: device.isPaired, setupCode: device.isPaired ? nil : device.setupCode,
             setupURI: device.isPaired ? nil : device.setupURI, discoveryIdentifier: discoveryIdentifier,
-            readings: server == nil ? nil : values))
+            readings: server == nil ? nil : values,
+            controlAvailable: server != nil && connected && snapshot?.hasState == true))
     }
     private func fail(_ message: String) {
         enabled = false; pauseServer()
-        snapshot = nil; values = nil; sourceNow = nil; wallAnchor = nil; connected = false
-        device = nil; thermometer = nil; storage = nil
-        emit(HomeKitTemperatureStatus(state: .failed, error: message))
+        snapshot = nil; publishedSnapshot = nil; values = nil; sourceNow = nil; wallAnchor = nil; connected = false
+        device = nil; accessory = nil; storage = nil
+        emit(DysonHomeKitStatus(state: .failed, error: message))
     }
     func didChangePairingState(from: HAP.PairingState, to: HAP.PairingState) {
         // HAP can call this from a request thread; serialize reporting with lifecycle commands.
@@ -374,16 +455,24 @@ private final class HomeKitTemperatureWorker: NSObject, HAP.DeviceDelegate, @unc
     }
 }
 
-@MainActor final class HomeKitTemperatureServer: HomeKitTemperatureServerProtocol {
-    var onStatus: (@MainActor (HomeKitTemperatureStatus) -> Void)?
+@MainActor final class DysonHomeKitServer: DysonHomeKitServerProtocol {
+    var onStatus: (@MainActor (DysonHomeKitStatus) -> Void)?
     private let backing: any HomeKitSecretStorage
     private let discovery: any HomeKitBonjourMonitoring
     private var requestedEnabled = false
-    private var workerStatus = HomeKitTemperatureStatus()
+    private var sourceAvailable = false
+    private var workerStatus = DysonHomeKitStatus()
     private var checkingIdentifier: String?
     private var verifiedIdentifier: String?
     private var discoveryError: String?
-    private lazy var worker = HomeKitTemperatureWorker(backing: backing) { [weak self] status in
+    var onControl: (@MainActor (DysonHomeCommand) async throws -> Void)?
+    private var controlTasks: [UUID: Task<Void, Never>] = [:]
+    private var controlEpoch = UUID()
+    private lazy var worker = DysonHomeKitWorker(backing: backing, control: { [weak self] command, epoch in
+        DispatchQueue.main.async {
+            self?.perform(command, epoch: epoch)
+        }
+    }) { [weak self] status in
         // A FIFO main-queue delivery preserves the worker's lifecycle ordering.
         DispatchQueue.main.async { self?.receive(status) }
     }
@@ -391,16 +480,42 @@ private final class HomeKitTemperatureWorker: NSObject, HAP.DeviceDelegate, @unc
          discovery: any HomeKitBonjourMonitoring = HomeKitBonjourMonitor()) {
         self.backing = backing; self.discovery = discovery
     }
-    func start() { requestedEnabled = true; worker.enqueue(.start) }
-    func update(_ snapshot: DysonSnapshot, connected: Bool, now: Date) { worker.enqueue(.update(snapshot, connected, now)) }
-    func stop() { requestedEnabled = false; clearDiscovery(); worker.enqueue(.stop) }
-    func reset() { requestedEnabled = false; clearDiscovery(); worker.enqueue(.reset) }
+    func start() { requestedEnabled = true; worker.enqueue(.start(controlEpoch)) }
+    func update(_ snapshot: DysonSnapshot, connected: Bool, now: Date) {
+        let available = snapshot.hasState && HomeKitAirReadings.make(snapshot, connected: connected, now: now) != nil
+        if sourceAvailable, !available { cancelControls() }
+        sourceAvailable = available
+        worker.enqueue(.update(snapshot, connected, now, controlEpoch))
+    }
+    func stop() { requestedEnabled = false; sourceAvailable = false; cancelControls(); clearDiscovery(); worker.enqueue(.stop) }
+    func reset() { requestedEnabled = false; sourceAvailable = false; cancelControls(); clearDiscovery(); worker.enqueue(.reset) }
+    private func cancelControls() {
+        controlEpoch = UUID()
+        controlTasks.values.forEach { $0.cancel() }; controlTasks = [:]
+    }
+    private func perform(_ command: DysonHomeCommand, epoch expectedEpoch: UUID) {
+        guard requestedEnabled, sourceAvailable, workerStatus.controlAvailable,
+              controlEpoch == expectedEpoch, let onControl else {
+            worker.enqueue(.reconcile(controlEpoch)); return
+        }
+        let id = UUID(), epoch = controlEpoch
+        controlTasks[id] = Task { [weak self] in
+            // Home already accepted the write. HomeStore retains confirmation,
+            // timeout reporting and cancellation; reconcile Home after either outcome.
+            do { try await onControl(command) } catch { }
+            guard let self, self.controlEpoch == epoch else { return }
+            self.controlTasks[id] = nil
+            self.worker.enqueue(.reconcile(epoch))
+        }
+    }
     private func clearDiscovery() {
         discovery.stop(); checkingIdentifier = nil; verifiedIdentifier = nil; discoveryError = nil
     }
-    private func receive(_ status: HomeKitTemperatureStatus) {
+    private func receive(_ status: DysonHomeKitStatus) {
         guard requestedEnabled || status.state == .disabled || status.state == .failed else { return }
+        let lostControl = sourceAvailable && workerStatus.controlAvailable && !status.controlAvailable && status.state == .waiting
         workerStatus = status
+        if status.state == .failed || lostControl { sourceAvailable = false; cancelControls() }
         guard status.state == .awaitingPairing || status.state == .paired else {
             clearDiscovery(); onStatus?(status); return
         }

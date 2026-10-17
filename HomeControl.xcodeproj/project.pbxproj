@@ -1,8 +1,8 @@
 // !$*UTF8*$!
 { archiveVersion = 1; classes = {}; objectVersion = 60; objects = {
-A10A00000000000000000001 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HomeControl/Services/HomeKitTemperatureServer.swift"; sourceTree = SOURCE_ROOT; };
+A10A00000000000000000001 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HomeControl/Services/DysonHomeKitServer.swift"; sourceTree = SOURCE_ROOT; };
 A10A00000000000000000002 = { isa = PBXBuildFile; fileRef = A10A00000000000000000001; };
-A10A00000000000000000003 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HomeControl/Views/HomeKitTemperatureSettings.swift"; sourceTree = SOURCE_ROOT; };
+A10A00000000000000000003 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HomeControl/Views/DysonHomeKitSettings.swift"; sourceTree = SOURCE_ROOT; };
 A10A00000000000000000004 = { isa = PBXBuildFile; fileRef = A10A00000000000000000003; };
 A10A00000000000000000005 = { isa = XCRemoteSwiftPackageReference; repositoryURL = "https://github.com/Bouke/HAP.git"; requirement = {kind = revision; revision = 51e3505a34eb842f7491fda48bb4ef873b16b68c;}; };
 A10A00000000000000000006 = { isa = XCSwiftPackageProductDependency; package = A10A00000000000000000005; productName = HAP; };

@@ -13,7 +13,13 @@ struct SavedConfiguration: Codable {
     var hue: HueConfiguration?
     var dyson: DysonConfiguration?
     // Optional for compatibility with configurations written before Apple Home support.
-    var homeKitTemperatureEnabled: Bool? = nil
+    var dysonHomeKitEnabled: Bool? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case hue, dyson
+        // Preserve the original on-disk key when renaming the sharing setting.
+        case dysonHomeKitEnabled = "homeKitTemperatureEnabled"
+    }
 }
 struct HueLight: Identifiable, Equatable, Sendable {
     var id: String; var name: String; var isOn: Bool; var brightness: Double?; var reachable: Bool

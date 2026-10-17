@@ -29,7 +29,7 @@ import Foundation
             persistence.saved.dyson = DysonConfiguration(host: "preview.invalid", serial: "PREVIEW", topicPrefix: "438", name: "Dyson TP07")
         }
         let homeKitMode = arguments.first(where: { $0.hasPrefix("--preview-homekit=") })?.split(separator: "=").last.map(String.init)
-        if homeKitMode != nil, persistence.saved.dyson != nil { persistence.saved.homeKitTemperatureEnabled = true }
+        if homeKitMode != nil, persistence.saved.dyson != nil { persistence.saved.dysonHomeKitEnabled = true }
         return HomeStore(hue: hue, dyson: dyson, secrets: PreviewSecrets(), persistence: persistence,
                          homeKit: PreviewHomeKit(mode: homeKitMode ?? "ready"))
     }
@@ -107,8 +107,9 @@ import Foundation
     func save(_ configuration: SavedConfiguration) throws { saved = configuration }
 }
 /// UI preview must never read or write the real Apple Home pairing or advertise synthetic data.
-@MainActor private final class PreviewHomeKit: HomeKitTemperatureServerProtocol {
-    var onStatus: (@MainActor (HomeKitTemperatureStatus) -> Void)?
+@MainActor private final class PreviewHomeKit: DysonHomeKitServerProtocol {
+    var onStatus: (@MainActor (DysonHomeKitStatus) -> Void)?
+    var onControl: (@MainActor (DysonHomeCommand) async throws -> Void)?
     private let mode: String
     private var enabled = false
     init(mode: String) { self.mode = mode }
@@ -117,18 +118,18 @@ import Foundation
         guard enabled else { return }
         switch mode {
         case "error":
-            onStatus?(HomeKitTemperatureStatus(state: .failed, error: "Apple Home could not start its local server. Disable and enable sharing to retry."))
+            onStatus?(DysonHomeKitStatus(state: .failed, error: "Apple Home could not start its local server. Disable and enable sharing to retry."))
         case "paired":
-            onStatus?(HomeKitTemperatureStatus(state: .paired, isPaired: true))
+            onStatus?(DysonHomeKitStatus(state: .paired, isPaired: true))
         case "waiting":
-            onStatus?(HomeKitTemperatureStatus(state: .waiting, setupCode: "248-36-579"))
+            onStatus?(DysonHomeKitStatus(state: .waiting, setupCode: "248-36-579"))
         default:
             let payload = String(UInt(24836579) | UInt(2) << 27 | UInt(10) << 31, radix: 36, uppercase: true)
             let uri = "X-HM://" + String(repeating: "0", count: max(0, 9 - payload.count)) + payload + "ABCD"
-            onStatus?(HomeKitTemperatureStatus(state: .awaitingPairing, setupCode: "248-36-579", setupURI: uri))
+            onStatus?(DysonHomeKitStatus(state: .awaitingPairing, setupCode: "248-36-579", setupURI: uri))
         }
     }
-    func stop() { enabled = false; onStatus?(HomeKitTemperatureStatus()) }
+    func stop() { enabled = false; onStatus?(DysonHomeKitStatus()) }
     func reset() { stop() }
 }
 #endif

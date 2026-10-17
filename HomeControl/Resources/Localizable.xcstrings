@@ -166,13 +166,13 @@
         }
       }
     },
-    "On your iPhone or iPad, open Home → Add Accessory → More Options, select Dyson Temperature, and enter this code.": {
+    "On your iPhone or iPad, open Home → Add Accessory → More Options, select Dyson TP07, and enter this code.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "On your iPhone or iPad, open Home → Add Accessory → More Options, select Dyson Temperature, and enter this code."
+            "value": "On your iPhone or iPad, open Home → Add Accessory → More Options, select Dyson TP07, and enter this code."
           }
         }
       }
@@ -210,13 +210,13 @@
         }
       }
     },
-    "This disables sharing and removes the saved pairing. Remove the old Dyson Temperature accessory from Home, then enable sharing and add it again.": {
+    "This disables sharing and removes the saved pairing. Remove the old Dyson accessory from Home, then enable sharing and add it again.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "This disables sharing and removes the saved pairing. Remove the old Dyson Temperature accessory from Home, then enable sharing and add it again."
+            "value": "This disables sharing and removes the saved pairing. Remove the old Dyson accessory from Home, then enable sharing and add it again."
           }
         }
       }
@@ -1933,6 +1933,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Your Mac and iPhone must be on the same local network. Sharing requires Home Control to be running and your Mac to be awake. The accessory requires fresh temperature, humidity, PM2.5 and PM10 readings. If any reading is unavailable or 120 seconds old, all shared readings become unavailable until fresh data returns."
+          }
+        }
+      }
+    },
+    "Share sensors and control with Apple Home": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share sensors and control with Apple Home"
+          }
+        }
+      }
+    },
+    "Apple Home can control power, Auto/Manual mode and fan speed. Your Mac and iPhone must be on the same local network. Home Control must be running and your Mac awake. Sharing requires fresh temperature, humidity, PM2.5 and PM10 readings. If any reading is unavailable or 120 seconds old, sensors and purifier control become unavailable until fresh data returns.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Home can control power, Auto/Manual mode and fan speed. Your Mac and iPhone must be on the same local network. Home Control must be running and your Mac awake. Sharing requires fresh temperature, humidity, PM2.5 and PM10 readings. If any reading is unavailable or 120 seconds old, sensors and purifier control become unavailable until fresh data returns."
           }
         }
       }

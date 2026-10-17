@@ -9,14 +9,14 @@ import Observation
     private(set) var scenes: [HueScene] = []
     private(set) var pendingSceneID: String?
     private(set) var dyson = DysonSnapshot()
-    private(set) var homeKitStatus = HomeKitTemperatureStatus()
+    private(set) var homeKitStatus = DysonHomeKitStatus()
     private(set) var now: Date
     var hueError: String?
     var dysonError: String?
     var storageError: String?
     private(set) var pendingLights: Set<String> = []
     private(set) var dysonPending = false
-    @ObservationIgnored private let homeKit: any HomeKitTemperatureServerProtocol
+    @ObservationIgnored private let homeKit: any DysonHomeKitServerProtocol
     @ObservationIgnored private let hue: any HueClientProtocol
     @ObservationIgnored private let dysonClient: any DysonClientProtocol
     @ObservationIgnored private let secrets: any SecretStoreProtocol
@@ -31,8 +31,27 @@ import Observation
     @ObservationIgnored private var dysonGeneration = UUID()
     @ObservationIgnored private var started = false
 
+    private final class DysonCommandRequest {
+        var fields: [String: String]
+        let isSpeed: Bool
+        var completions: [(Result<Void, Error>) -> Void]
+        private var finished = false
+        init(fields: [String: String], completion: @escaping (Result<Void, Error>) -> Void) {
+            self.fields = fields; isSpeed = fields["fnsp"] != nil; completions = [completion]
+        }
+        func finish(_ result: Result<Void, Error>) {
+            guard !finished else { return }; finished = true
+            completions.forEach { $0(result) }; completions = []
+        }
+    }
+    @ObservationIgnored private var dysonQueue: [DysonCommandRequest] = []
+    @ObservationIgnored private var activeDysonCommand: DysonCommandRequest?
+    @ObservationIgnored private var dysonCommandTask: Task<Void, Never>?
+    @ObservationIgnored private var dysonCommandEpoch = UUID()
+    @ObservationIgnored private var dysonSnapshotRevision: UInt64 = 0
+
     init(hue: any HueClientProtocol = HueClient(), dyson: any DysonClientProtocol = DysonClient(),
-         secrets: any SecretStoreProtocol = KeychainStore(), persistence: any ConfigurationStoreProtocol = FileConfigurationStore(), clock: any AppClock = SystemClock(), homeKit: any HomeKitTemperatureServerProtocol = HomeKitTemperatureServer()) {
+         secrets: any SecretStoreProtocol = KeychainStore(), persistence: any ConfigurationStoreProtocol = FileConfigurationStore(), clock: any AppClock = SystemClock(), homeKit: any DysonHomeKitServerProtocol = DysonHomeKitServer()) {
         self.homeKit = homeKit
         self.hue = hue; self.dysonClient = dyson; self.secrets = secrets; self.persistence = persistence; self.clock = clock
         now = clock.now
@@ -40,8 +59,23 @@ import Observation
         homeKit.onStatus = { [weak self] status in
             guard let self else { return }
             // Ignore queued running statuses after the preference has been disabled.
-            if self.configuration.homeKitTemperatureEnabled == true || status.state == .disabled || status.state == .failed {
+            if self.configuration.dysonHomeKitEnabled == true || status.state == .disabled || status.state == .failed {
                 self.homeKitStatus = status
+            }
+        }
+        homeKit.onControl = { [weak self] command in
+            guard let self, self.configuration.dysonHomeKitEnabled == true else { throw HomeKitControlError.unavailable }
+            let fields = try command.fields(), epoch = self.dysonCommandEpoch
+            try await withTaskCancellationHandler {
+                try Task.checkCancellation()
+                try await withCheckedThrowingContinuation { continuation in
+                    self.enqueueDyson(fields) { continuation.resume(with: $0) }
+                }
+            } onCancel: {
+                Task { @MainActor [weak self] in
+                    guard let self, self.dysonCommandEpoch == epoch else { return }
+                    self.cancelDysonCommands()
+                }
             }
         }
         dyson.onSnapshot = { [weak self] snapshot in
@@ -54,35 +88,37 @@ import Observation
             if merged.voc == nil { merged.voc = self.dyson.voc }
             if merged.nitrogenDioxide == nil { merged.nitrogenDioxide = self.dyson.nitrogenDioxide }
             self.dyson = merged
-            self.updateHomeKitTemperature()
+            self.dysonSnapshotRevision &+= 1
+            self.updateDysonHomeKit()
         }
         dyson.onConnection = { [weak self] state, error in
             self?.dysonState = state
-            self?.updateHomeKitTemperature()
+            if state != .online { self?.cancelDysonCommands() }
+            self?.updateDysonHomeKit()
             if let error { self?.dysonError = error }
         }
     }
-    func setHomeKitTemperatureEnabled(_ enabled: Bool) {
+    func setDysonHomeKitEnabled(_ enabled: Bool) {
         guard !enabled || configuration.dyson != nil else { return }
-        var updated = configuration; updated.homeKitTemperatureEnabled = enabled
+        var updated = configuration; updated.dysonHomeKitEnabled = enabled
         do {
             try persistence.save(updated); configuration = updated; storageError = nil
             if enabled {
-                homeKit.stop(); homeKit.start(); updateHomeKitTemperature()
-            } else { homeKit.stop(); homeKitStatus = HomeKitTemperatureStatus() }
+                homeKit.stop(); homeKit.start(); updateDysonHomeKit()
+            } else { cancelDysonCommands(); homeKit.stop(); homeKitStatus = DysonHomeKitStatus() }
         } catch { storageError = error.localizedDescription }
     }
     func resetHomeKitPairing() {
         // Save the disabled preference before deleting keys: a failed save must leave pairing intact.
-        var updated = configuration; updated.homeKitTemperatureEnabled = false
+        var updated = configuration; updated.dysonHomeKitEnabled = false
         do {
             try persistence.save(updated); configuration = updated; storageError = nil
-            homeKit.reset(); homeKitStatus = HomeKitTemperatureStatus()
+            cancelDysonCommands(); homeKit.reset(); homeKitStatus = DysonHomeKitStatus()
         } catch { storageError = error.localizedDescription }
     }
     func restartHomeKitAfterNetworkChange() {
-        guard configuration.homeKitTemperatureEnabled == true, configuration.dyson != nil else { return }
-        homeKit.stop(); homeKit.start(); updateHomeKitTemperature()
+        guard configuration.dysonHomeKitEnabled == true, configuration.dyson != nil else { return }
+        cancelDysonCommands(); homeKit.stop(); homeKit.start(); updateDysonHomeKit()
     }
     func recoverConnectionsAfterNetworkChange() {
         // The default route can change while local device sockets remain healthy.
@@ -91,8 +127,8 @@ import Observation
         if dysonState == .offline { reconnect(.dyson) }
         restartHomeKitAfterNetworkChange()
     }
-    private func updateHomeKitTemperature() {
-        guard configuration.homeKitTemperatureEnabled == true, configuration.dyson != nil else { return }
+    private func updateDysonHomeKit() {
+        guard configuration.dysonHomeKitEnabled == true, configuration.dyson != nil else { return }
         homeKit.update(dyson, connected: dysonState == .online, now: clock.now)
     }
     var visibleScenes: [HueScene] {
@@ -133,8 +169,8 @@ import Observation
     func start() {
         guard !started else { return }; started = true
         reconnect(.hue); reconnect(.dyson)
-        if configuration.homeKitTemperatureEnabled == true, configuration.dyson != nil {
-            homeKit.start(); updateHomeKitTemperature()
+        if configuration.dysonHomeKitEnabled == true, configuration.dyson != nil {
+            homeKit.start(); updateDysonHomeKit()
         }
         timer = Task { [weak self] in
             var seconds = 0
@@ -142,7 +178,7 @@ import Observation
                 guard let self else { return }
                 do { try await self.clock.sleep(seconds: 1) } catch { return }
                 self.now = self.clock.now; seconds += 1
-                self.updateHomeKitTemperature()
+                self.updateDysonHomeKit()
                 if seconds % 30 == 0, self.dysonState == .online { self.dysonClient.requestSensors() }
             }
         }
@@ -153,6 +189,7 @@ import Observation
         dysonClient.disconnect(); started = false
     }
     private func cancelCommands() {
+        cancelDysonCommands()
         commandTasks.values.forEach { $0.cancel() }; commandTasks = [:]
         pendingLights = []; pendingSceneID = nil; hueCommandIDs = []; dysonPending = false
     }
@@ -192,6 +229,7 @@ import Observation
         }
     }
     private func maintainDyson(alreadyConnected: Bool) {
+        cancelDysonCommands()
         dysonTask?.cancel(); dysonGeneration = UUID()
         if !alreadyConnected { dysonClient.disconnect() }
         guard let config = configuration.dyson else { dysonState = .notConnected; return }
@@ -240,6 +278,7 @@ import Observation
             throw ControlError.message(String(localized: "Enter a valid serial, MQTT credential and TP07 topic prefix (438, 438E, 438K or 438M)."))
         }
         var config = config; config.host = try validatedHost(config.host)
+        cancelDysonCommands()
         dysonTask?.cancel(); dysonGeneration = UUID()
         do {
             try await dysonClient.connect(configuration: config, credential: credential)
@@ -261,9 +300,9 @@ import Observation
     func remove(_ kind: DeviceKind) {
         do {
             var updated = configuration
-            if kind == .hue { updated.hue = nil } else { updated.dyson = nil; updated.homeKitTemperatureEnabled = false }
+            if kind == .hue { updated.hue = nil } else { updated.dyson = nil; updated.dysonHomeKitEnabled = false }
             try commit(updated, account: kind.rawValue, secret: nil)
-            if kind == .dyson { homeKit.stop(); homeKitStatus = HomeKitTemperatureStatus() }
+            if kind == .dyson { homeKit.stop(); homeKitStatus = DysonHomeKitStatus() }
             cancelCommands()
             if kind == .hue { lights = []; scenes = []; hueError = nil } else { dyson = DysonSnapshot(); dysonError = nil }
             reconnect(kind)
@@ -351,33 +390,70 @@ import Observation
         }
     }
     func setDyson(_ fields: [String: String]) {
-        guard dysonState == .online, !dysonPending else { return }
-        dysonPending = true; dysonError = nil
-        let generation = dysonGeneration, taskID = UUID()
-        commandTasks[taskID] = Task { [weak self] in
+        enqueueDyson(fields) { _ in }
+    }
+    private func enqueueDyson(_ fields: [String: String], completion: @escaping (Result<Void, Error>) -> Void) {
+        guard dysonState == .online else { completion(.failure(ControlError.offline)); return }
+        // Only adjacent pending speeds can be replaced; power/mode commands are barriers.
+        if fields["fnsp"] != nil, let last = dysonQueue.last, last.isSpeed {
+            last.fields = fields; last.completions.append(completion)
+        } else { dysonQueue.append(DysonCommandRequest(fields: fields, completion: completion)) }
+        dysonPending = true
+        guard dysonCommandTask == nil else { return }
+        dysonError = nil
+        let epoch = dysonCommandEpoch, generation = dysonGeneration
+        dysonCommandTask = Task { [weak self] in
             guard let self else { return }
-            defer { self.dysonPending = false; self.commandTasks[taskID] = nil }
-            do {
-                let deadline = self.clock.now.addingTimeInterval(10)
-                try self.dysonClient.command(fields)
-                while self.clock.now < deadline {
-                    try Task.checkCancellation()
-                    guard self.dysonGeneration == generation, self.dysonState == .online else { throw ControlError.offline }
-                    let matches = fields.allSatisfy { key, value in
-                        switch key {
-                        case "fpwr": return self.dyson.isOn == (value == "ON")
-                        case "auto": return self.dyson.autoMode == (value == "ON")
-                        case "fnsp": return self.dyson.speed == Int(value)
-                        case "rhtm": return self.dyson.continuousMonitoring == (value == "ON")
-                        default: return false
-                        }
-                    }
-                    if matches { return }
-                    try await self.clock.sleep(seconds: 0.1)
+            defer {
+                if self.dysonCommandEpoch == epoch {
+                    self.dysonCommandTask = nil; self.activeDysonCommand = nil; self.dysonPending = false
                 }
-                throw ControlError.timeout
-            } catch is CancellationError { }
-            catch { self.dysonError = error.localizedDescription }
+            }
+            while !self.dysonQueue.isEmpty, self.dysonCommandEpoch == epoch {
+                let request = self.dysonQueue.removeFirst()
+                self.activeDysonCommand = request
+                do {
+                    try Task.checkCancellation()
+                    guard self.dysonState == .online, self.dysonGeneration == generation else { throw ControlError.offline }
+                    let revision = self.dysonSnapshotRevision
+                    let deadline = self.clock.now.addingTimeInterval(10)
+                    try self.dysonClient.command(request.fields)
+                    while true {
+                        try Task.checkCancellation()
+                        guard self.dysonCommandEpoch == epoch, self.dysonGeneration == generation,
+                              self.dysonState == .online else { throw ControlError.offline }
+                        if self.dysonSnapshotRevision > revision, self.dysonMatches(request.fields) { break }
+                        guard self.clock.now < deadline else { throw ControlError.timeout }
+                        try await self.clock.sleep(seconds: 0.1)
+                    }
+                    request.finish(.success(()))
+                } catch {
+                    request.finish(.failure(error))
+                    if self.dysonCommandEpoch == epoch, !(error is CancellationError) {
+                        self.dysonError = error.localizedDescription
+                    }
+                }
+                if self.dysonCommandEpoch == epoch { self.activeDysonCommand = nil }
+            }
         }
+    }
+    private func dysonMatches(_ fields: [String: String]) -> Bool {
+        fields.allSatisfy { key, value in
+            switch key {
+            case "fpwr": return dyson.isOn == (value == "ON")
+            case "auto": return dyson.autoMode == (value == "ON")
+            case "fnsp": return dyson.speed == Int(value)
+            case "rhtm": return dyson.continuousMonitoring == (value == "ON")
+            default: return false
+            }
+        }
+    }
+    private func cancelDysonCommands() {
+        dysonCommandEpoch = UUID()
+        dysonCommandTask?.cancel(); dysonCommandTask = nil
+        activeDysonCommand?.finish(.failure(ControlError.offline)); activeDysonCommand = nil
+        let pending = dysonQueue; dysonQueue = []
+        pending.forEach { $0.finish(.failure(ControlError.offline)) }
+        dysonPending = false
     }
 }

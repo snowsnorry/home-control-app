@@ -1,7 +1,7 @@
 import SwiftUI
 import CoreImage.CIFilterBuiltins
 
-struct HomeKitTemperatureSettings: View {
+struct DysonHomeKitSettings: View {
     let store: HomeStore
     @State private var confirmsReset = false
 
@@ -9,15 +9,15 @@ struct HomeKitTemperatureSettings: View {
         VStack(alignment: .leading, spacing: 10) {
             Divider()
             Text("Apple Home").font(.headline)
-            Toggle("Share data with Apple Home", isOn: Binding(
-                get: { store.configuration.homeKitTemperatureEnabled == true },
-                set: { store.setHomeKitTemperatureEnabled($0) }))
+            Toggle("Share sensors and control with Apple Home", isOn: Binding(
+                get: { store.configuration.dysonHomeKitEnabled == true },
+                set: { store.setDysonHomeKitEnabled($0) }))
                 .disabled(store.configuration.dyson == nil)
             Text(LocalizedStringKey(store.homeKitStatus.state.rawValue)).foregroundStyle(.secondary)
             if store.homeKitStatus.isPaired {
                 Label("Pairing is saved", systemImage: "checkmark.shield")
             }
-            if store.configuration.homeKitTemperatureEnabled == true,
+            if store.configuration.dysonHomeKitEnabled == true,
                let code = store.homeKitStatus.setupCode {
                 LabeledContent("Setup code", value: code).textSelection(.enabled)
                 if store.homeKitStatus.state == .awaitingPairing,
@@ -29,13 +29,13 @@ struct HomeKitTemperatureSettings: View {
                     Text("In Home on your iPhone or iPad, tap Add Accessory and scan this QR code.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Text("On your iPhone or iPad, open Home → Add Accessory → More Options, select Dyson Temperature, and enter this code.")
+                Text("On your iPhone or iPad, open Home → Add Accessory → More Options, select Dyson TP07, and enter this code.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Text("Your Mac and iPhone must be on the same local network. Sharing requires Home Control to be running and your Mac to be awake. The accessory requires fresh temperature, humidity, PM2.5 and PM10 readings. If any reading is unavailable or 120 seconds old, all shared readings become unavailable until fresh data returns.")
+            Text("Apple Home can control power, Auto/Manual mode and fan speed. Your Mac and iPhone must be on the same local network. Home Control must be running and your Mac awake. Sharing requires fresh temperature, humidity, PM2.5 and PM10 readings. If any reading is unavailable or 120 seconds old, sensors and purifier control become unavailable until fresh data returns.")
                 .font(.caption).foregroundStyle(.secondary)
             if let error = store.homeKitStatus.error { ErrorNotice(message: String(localized: String.LocalizationValue(error))) }
-            if store.configuration.homeKitTemperatureEnabled == true {
+            if store.configuration.dysonHomeKitEnabled == true {
                 Button("Check Visibility Again") { store.restartHomeKitAfterNetworkChange() }
             }
             Button("Reset Apple Home Pairing…", role: .destructive) { confirmsReset = true }
@@ -44,7 +44,7 @@ struct HomeKitTemperatureSettings: View {
             Button("Reset Pairing", role: .destructive) { store.resetHomeKitPairing() }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("This disables sharing and removes the saved pairing. Remove the old Dyson Temperature accessory from Home, then enable sharing and add it again.")
+            Text("This disables sharing and removes the saved pairing. Remove the old Dyson accessory from Home, then enable sharing and add it again.")
         }
     }
 }

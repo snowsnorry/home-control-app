@@ -77,7 +77,7 @@ struct SettingsView: View {
         }
         if let error = wizard.selected == .hue ? store.hueError : store.dysonError { ErrorNotice(message: error) }
         if wizard.selected == .hue, store.configuration.hue != nil { HueSceneSettings(store: store) }
-        if wizard.selected == .dyson { HomeKitTemperatureSettings(store: store) }
+        if wizard.selected == .dyson { DysonHomeKitSettings(store: store) }
     }
     @ViewBuilder private var hueWizard: some View {
         if let configuration = wizard.identifiedHue {

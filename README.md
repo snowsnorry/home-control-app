@@ -57,17 +57,78 @@ Temperature, humidity, PM2.5, PM10, VOC and NO₂ come directly from the TP07 ov
 
 The card's muted green/yellow/orange/red/pink/purple background reflects the worst fresh pollutant reading. PM2.5 boundaries are 36/54/71/151/251 µg/m³, PM10 boundaries are 51/76/101/351/421 µg/m³, and gas-index boundaries are 4/7/9 after dividing `va10` and `noxl` by ten. PM values prefer `p25r`/`p10r`, falling back to `pm25`/`pm10`. This is an app-calculated classification based on the local protocol, not a ready-made MyDyson score; exact MyDyson agreement needs hardware acceptance. Offline or missing/stale air-quality data produces a neutral background. Sensors are requested every 30 seconds. After two minutes without a valid temperature measurement, the menu bar temperature disappears; the panel retains the last reading with its update time. Continuous monitoring can be enabled explicitly in Dyson settings to receive readings while the fan is in standby. Device commands wait up to 10 seconds for confirmation and are never queued for later offline delivery.
 
-## Apple Home sensor data (experimental)
+## Apple Home sensors and purifier control (experimental)
 
-In **Settings → Dyson TP07**, enable **Share data with Apple Home**. Sharing is disabled by default and publishes temperature, relative humidity, PM2.5, PM10 and overall air quality as a local HomeKit accessory named **Dyson Temperature**. It uses the embedded [Bouke/HAP](https://github.com/Bouke/HAP) library pinned to revision `51e3505a34eb842f7491fda48bb4ef873b16b68c`; there is no separate bridge process or external service.
+In **Settings → Dyson TP07**, enable **Share sensors and control with Apple Home**.
+The local accessory **Dyson TP07** (previously **Dyson Temperature**) shares temperature, humidity,
+PM2.5, PM10 and overall air quality, plus an Air Purifier service for power,
+Auto/Manual mode and fan speed. No separate Homebridge process is needed.
+The unmodified [Bouke/HAP](https://github.com/Bouke/HAP) library is fetched by
+SwiftPM at revision `51e3505a34eb842f7491fda48bb4ef873b16b68c` in both Xcode and
+`Package.swift`. No library source or local fork is kept in this repository.
 
-Keep the Mac and iPhone/iPad on the same local network. Once all four numeric readings are fresh, open **Home → Add Accessory** and scan the QR code shown in settings. Alternatively, use **More Options**, choose **Dyson Temperature**, and enter its setup code. The QR is generated locally from HAP’s saved setup URI and does not transmit the code to an external service. The app shows **Checking visibility on the local network…** until its own accessory identity is discovered and resolved through Bonjour. A listening socket alone no longer produces **Ready to add to Apple Home**. If discovery fails, the app reports the Bonjour error code and domain; it does not infer that the Local Network permission switch is off. Choose **Check Visibility Again** to retry. The bundle declares canonical and fully qualified Bonjour service types, including `_hap._tcp.`. The installer uses a fresh application path and increasing build numbers because the legacy installation was observed rejecting `_hap._tcp` while an identical clean installation discovered it successfully. Check the Local Network permission only if access has actually been denied. Check VPN, firewall and Wi-Fi client isolation if the phone still cannot discover it. A QR code cannot bypass local network permissions. An uncertified-accessory notice may appear. Home Control must stay running and the Mac must stay awake; its panel does not need to be open. Enable Dyson's existing **Continuous monitoring** setting separately if readings are needed with the fan in standby.
+Existing pairings upgrade in place. The serial number, AID, existing service/characteristic IIDs and pairing keys are
+preserved. The advertised name and model are now **Dyson TP07**. Apple Home may
+retain a previously saved display name; rename that accessory in its Home settings
+without resetting the pairing. The purifier
+service is appended, with one configuration-number increment. Do not remove or
+reset the accessory to upgrade it.
 
-All four numeric readings must be finite, less than 120 seconds old and not dated in the future. Temperature must be 0–100 °C, humidity 0–100%, and PM2.5/PM10 0–1000 µg/m³. If any required reading is missing, invalid or stale, or Dyson disconnects, the entire local accessory server pauses; Home may temporarily retain its own cached values before displaying unavailability. Publication resumes once all four readings are valid and fresh, using a new HAP object graph with the saved pairing. Overall air quality uses the same fresh-pollutant calculation as the app, including VOC and NO₂; those gas indices are not exported as concentrations. App levels Good/Fair/Poor/Very poor/Extremely poor/Severe map to HomeKit Excellent/Good/Fair/Inferior/Poor/Poor (1/2/3/4/5/5). Expiry of a gas reading recalculates quality even without new messages. This avoids HAP's default numeric value in accessory discovery responses. No extra Dyson polling is added.
+For a new pairing, keep the Mac and iPhone/iPad on the same local network, open
+**Home → Add Accessory**, and scan the QR code in settings. Alternatively choose
+**More Options → Dyson TP07** and enter its setup code. Codes and QR images
+are generated locally. The app reports **Ready to add to Apple Home** only after
+its exact accessory is discovered and resolved through Bonjour, not merely after
+a socket starts listening. **Check Visibility Again** retries discovery. An
+uncertified-accessory notice may appear. A Bonjour error, including `-72008`, is
+reported with its domain and does not establish that Local Network permission is
+disabled. Check macOS Local Network access, VPN, firewall and Wi-Fi isolation as
+appropriate; a QR code cannot bypass discovery restrictions.
 
-Accessory identity, setup code, private keys and controller pairings are saved together in this app's Keychain under a separate account. Disabling sharing, restarting, network recovery and removal of the Dyson connection preserve the pairing. Removing Dyson disables sharing; reconnecting requires enabling it again. **Reset Apple Home Pairing…** explicitly disables sharing and deletes the saved identity. Remove the old accessory from Home before enabling sharing and adding it again. Storage errors stop publication and do not silently replace existing pairing keys.
+### Controls and availability
 
-Temperature, humidity, air quality, PM2.5 and PM10 have been verified in the macOS Home app with a real Dyson and an existing pairing. Sleep/wake, extended outages and explicit reset still need full hardware acceptance. Hardware acceptance: add the accessory and compare its temperature with the app, restart Home Control without re-adding it, disable/re-enable sharing, sleep/wake the Mac, disconnect/reconnect the network and Dyson, check unavailability after 120 seconds without a valid reading, and verify explicit reset requires a new pairing. The temperature-only accessory upgrades in place: existing temperature IIDs, accessory identity and controller pairings are preserved, with a single HAP configuration-number increment for the added services. The existing Home accessory displayed humidity, both particle densities and mapped air quality after updating without re-pairing. Purifier control and history are outside this experiment.
+- Power changes only power; selecting Auto/Manual changes only mode.
+- Speed 10–100% maps to Dyson steps 1–10, rounded to the nearest step. Positive
+  speed turns the purifier on in Manual mode; 0% turns power off.
+- Local Dyson state updates Home, including changes made with its remote, MyDyson
+  or Home Control. Upstream HAP acknowledges controller writes immediately and
+  initially exposes the requested value. Home Control still waits up to 10 seconds
+  for a matching subsequent Dyson snapshot. If the command fails, its error is shown
+  in Home Control and the latest actual state is republished to Home; the original
+  Home request cannot receive that later error.
+- Commands are serialized across Home and the panel. Adjacent pending speed changes
+  are coalesced to the last speed, without moving past power or mode commands.
+  Disconnecting, changing connections, stopping or resetting sharing cancels pending
+  commands. Offline commands are never delivered later.
+- The entire accessory, including power/mode/speed, pauses if Dyson disconnects or
+  any required sensor reading is missing, invalid or 120 seconds old. Publication
+  starts only after all required readings are fresh, so initial sensor placeholders
+  are not advertised. Fresh readings restore the same pairing and service IDs.
+  Home may retain previously cached readings temporarily.
+
+
+Numeric readings must be finite, not future-dated, and younger than 120 seconds:
+temperature 0–100 °C, humidity 0–100%, PM2.5/PM10 0–1000 µg/m³. Overall quality uses
+the app's fresh-pollutant calculation, including VOC and NO₂, mapped to HomeKit
+Excellent/Good/Fair/Inferior/Poor/Poor (1/2/3/4/5/5). Gas indices are not exported
+as concentrations. No extra sensor polling is added. Enable **Continuous
+monitoring** separately if readings are needed while the purifier is in standby.
+
+Home Control must remain running and the Mac awake. Remote access and Home
+automations additionally require an Apple home hub. Sharing is disabled by default;
+the existing saved sharing preference enables both sensors and controls after upgrade.
+Identity, private keys, setup code and controller pairings remain in the app's
+separate Keychain record. Disabling sharing or removing Dyson preserves that record;
+removing Dyson disables sharing. **Reset Apple Home Pairing…** explicitly disables
+sharing and deletes it. Storage failures stop publication rather than replace keys.
+
+Automated tests use synthetic identities and simulated Dyson responses. Temperature,
+humidity and air-quality publication had prior hardware acceptance; the new purifier
+controls still require acceptance with a real TP07 and Apple Home: confirm existing
+pairing survives upgrade, exercise power/mode/speed, change settings with the remote
+and MyDyson, restart Home Control, sleep/wake the Mac, disconnect/reconnect the network,
+and verify sensor expiry makes the whole accessory unavailable and recovery needs no
+new pairing.
 
 ## Validation
 
