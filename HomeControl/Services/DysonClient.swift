@@ -69,7 +69,11 @@ import OSLog
             Task { @MainActor in
                 guard let self, self.generation == generation else { return }
                 do {
-                    self.snapshot = try DysonCodec.updated(self.snapshot, payload: data, now: Date())
+                    let previous = self.snapshot
+                    self.snapshot = try DysonCodec.updated(previous, payload: data, now: Date())
+                    if self.snapshot.canLocateStoppedPosition && !previous.canLocateStoppedPosition {
+                        self.publish(message: "LOCATE", additional: ["mode-reason": "LAPP"], qos: .qos1)
+                    }
                     self.onSnapshot?(self.snapshot)
                     if self.snapshot.hasState {
                         if self.continuation != nil { Self.logger.notice("Initial device state received") }
@@ -111,9 +115,10 @@ import OSLog
         finish(.failure(CancellationError()))
         mqtt?.didDisconnect = { _, _ in }; mqtt?.disconnect(); mqtt = nil
     }
-    private func publish(message: String) {
-        guard subscribed, let mqtt, let configuration, let text = try? DysonCodec.encode(message: message, now: Date()) else { return }
-        mqtt.publish(configuration.topicPrefix + "/" + configuration.serial + "/command", withString: text, qos: .qos0, retained: false)
+    private func publish(message: String, additional: [String: String] = [:], qos: CocoaMQTTQoS = .qos0) {
+        guard subscribed, let mqtt, let configuration,
+              let text = try? DysonCodec.encode(message: message, additional: additional, now: Date()) else { return }
+        mqtt.publish(configuration.topicPrefix + "/" + configuration.serial + "/command", withString: text, qos: qos, retained: false)
     }
     func requestState() { publish(message: "REQUEST-CURRENT-STATE") }
     func requestSensors() { publish(message: "REQUEST-PRODUCT-ENVIRONMENT-CURRENT-SENSOR-DATA") }

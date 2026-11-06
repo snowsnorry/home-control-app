@@ -79,6 +79,11 @@ import Foundation
     var onConnection: (@MainActor (ConnectionState, String?) -> Void)?
     var snapshot: DysonSnapshot = {
         var snapshot = DysonSnapshot(); snapshot.isOn = true; snapshot.autoMode = true; snapshot.speed = 1; snapshot.hasState = true
+        snapshot.airflowDirection = .front
+        snapshot.oscillation = .off
+        snapshot.oscillationProfile = "CUST"
+        snapshot.oscillationLowerAngle = 135
+        snapshot.oscillationUpperAngle = 225
         snapshot.temperature = SensorReading(value: 22.4, receivedAt: Date()); snapshot.humidity = SensorReading(value: 46, receivedAt: Date())
         return snapshot
     }()
@@ -90,9 +95,11 @@ import Foundation
         onSnapshot?(snapshot)
     }
     func command(_ fields: [String: String]) throws {
-        if let value = fields["fpwr"] { snapshot.isOn = value == "ON" }
-        if let value = fields["auto"] { snapshot.autoMode = value == "ON" }
-        if let value = fields["fnsp"] { snapshot.speed = Int(value) }
+        let now = Date()
+        var state = fields
+        if let lower = fields["osal"], lower == fields["osau"] { state["oson"] = "OFF" }
+        let reply = try DysonCodec.encode(message: "STATE-CHANGE", additional: ["product-state": state], now: now)
+        snapshot = try DysonCodec.updated(snapshot, payload: Data(reply.utf8), now: now)
         onSnapshot?(snapshot)
     }
 }

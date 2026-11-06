@@ -75,6 +75,88 @@ final class CodecTests: XCTestCase {
         state = try DysonCodec.updated(state, payload: packet(#"{"msg":"STATE-CHANGE","product-state":{"auto":["OFF","ON"]}}"#), now: Date())
         XCTAssertTrue(state.isOn); XCTAssertTrue(state.autoMode); XCTAssertEqual(state.speed, 5); XCTAssertTrue(state.continuousMonitoring)
     }
+    func testAirflowAndOscillationMergeStateChanges() throws {
+        let now = Date()
+        let current = packet(#"{"msg":"CURRENT-STATE","product-state":{"fdir":"ON","oson":"OIOF","ancp":"0090","osal":"0135","osau":"0225"}}"#)
+        var state = try DysonCodec.updated(DysonSnapshot(), payload: current, now: now)
+        XCTAssertEqual(state.airflowDirection, .front)
+        XCTAssertEqual(state.oscillation, .legacyOff)
+
+        let change = packet(#"{"msg":"STATE-CHANGE","product-state":{"fdir":["ON","OFF"],"oson":["OIOF","OION"]}}"#)
+        state = try DysonCodec.updated(state, payload: change, now: now)
+        XCTAssertEqual(state.airflowDirection, .rear)
+        XCTAssertEqual(state.oscillation, .legacyOn)
+        XCTAssertEqual(state.oscillationProfile, "0090")
+        XCTAssertEqual(state.oscillationLowerAngle, 135)
+        XCTAssertEqual(state.oscillationUpperAngle, 225)
+    }
+    func testOscillationRangeUsesNamedPresetAndKeepsLastCenterOnStop() throws {
+        let now = Date()
+        let active = packet(#"{"msg":"CURRENT-STATE","product-state":{"oson":"ON","ancp":"0090","osal":"0130","osau":"0175"}}"#)
+        var state = try DysonCodec.updated(DysonSnapshot(), payload: active, now: now)
+        XCTAssertEqual(state.activeOscillationRange?.span, 90)
+        XCTAssertEqual(state.oscillationCenter, 180)
+
+        let stopped = packet(#"{"msg":"STATE-CHANGE","product-state":{"oson":["ON","OFF"],"ancp":"0000"}}"#)
+        state = try DysonCodec.updated(state, payload: stopped, now: now)
+        XCTAssertEqual(state.oscillationEnabled, false)
+        XCTAssertNil(state.fixedOscillationDirection)
+        XCTAssertEqual(state.oscillationCenter, 180)
+
+        let aimed = packet(#"{"msg":"STATE-CHANGE","product-state":{"oson":"OFF","ancp":"CUST","osal":"0100","osau":"0100"}}"#)
+        state = try DysonCodec.updated(state, payload: aimed, now: now)
+        XCTAssertEqual(state.fixedOscillationDirection, 100)
+        XCTAssertEqual(state.oscillationCenter, 100)
+
+        let noPosition = packet(#"{"msg":"CURRENT-STATE","product-state":{"oson":"OFF","ancp":"CUST","osal":"INV"}}"#)
+        state = try DysonCodec.updated(DysonSnapshot(), payload: noPosition, now: now)
+        XCTAssertNil(state.oscillationCenter)
+    }
+    func testLocationUpdatesStoppedDirectionAndClearsWhenSweepResumes() throws {
+        let now = Date()
+        let sweep = packet(#"{"msg":"CURRENT-STATE","product-state":{"fpwr":"ON","oson":"ON","ancp":"CUST","osal":"0135","osau":"0225"}}"#)
+        let location = packet(#"{"msg":"LOCATION","apos":"0151"}"#)
+        let stop = packet(#"{"msg":"STATE-CHANGE","product-state":{"oson":["ON","OFF"]}}"#)
+        var state = try DysonCodec.updated(DysonSnapshot(), payload: sweep, now: now)
+        state = try DysonCodec.updated(state, payload: location, now: now)
+        XCTAssertNil(state.stoppedOscillationAngle)
+        XCTAssertFalse(state.canLocateStoppedPosition)
+
+        state = try DysonCodec.updated(state, payload: stop, now: now)
+        XCTAssertTrue(state.canLocateStoppedPosition)
+        XCTAssertEqual(state.oscillationCenter, 180)
+        state = try DysonCodec.updated(state, payload: location, now: now)
+        XCTAssertEqual(state.stoppedOscillationAngle, 151)
+        XCTAssertEqual(state.oscillationCenter, 151)
+        XCTAssertEqual(state.oscillationLowerAngle, 135)
+        XCTAssertEqual(state.oscillationUpperAngle, 225)
+
+        let settled = packet(#"{"msg":"STATE-CHANGE","product-state":{"oscs":["ON","OFF"]}}"#)
+        state = try DysonCodec.updated(state, payload: settled, now: now)
+        let invalid = packet(#"{"msg":"LOCATION","apos":"0361"}"#)
+        state = try DysonCodec.updated(state, payload: invalid, now: now)
+        XCTAssertEqual(state.oscillationCenter, 151)
+
+        state = try DysonCodec.updated(state, payload: sweep, now: now)
+        XCTAssertNil(state.stoppedOscillationAngle)
+        state = try DysonCodec.updated(state, payload: stop, now: now)
+        XCTAssertEqual(state.oscillationCenter, 180)
+    }
+    func testOscillationLimitsKeepSpanAndSnapToDeviceTravel() {
+        let left = DysonOscillationRange(center: 0, span: 45)
+        XCTAssertEqual(left?.lower, 5)
+        XCTAssertEqual(left?.upper, 50)
+        let right = DysonOscillationRange(center: 360, span: 90)
+        XCTAssertEqual(right?.lower, 265)
+        XCTAssertEqual(right?.upper, 355)
+        let full = DysonOscillationRange(center: 5, span: 350)
+        XCTAssertEqual(full, DysonOscillationRange(center: 355, span: 350))
+        XCTAssertEqual(full?.center, 180)
+        XCTAssertEqual(full?.canMove, false)
+        let fixed = DysonOscillationRange(center: 107, span: 0)
+        XCTAssertEqual(fixed?.lower, 105)
+        XCTAssertEqual(fixed?.upper, 105)
+    }
     func testMissingSensorPreservesOtherReading() throws {
         var state = DysonSnapshot(); state.temperature = SensorReading(value: 20, receivedAt: Date())
         state = try DysonCodec.updated(state, payload: packet(#"{"msg":"ENVIRONMENTAL-CURRENT-SENSOR-DATA","data":{"hact":"0050"}}"#), now: Date())
@@ -136,7 +218,12 @@ final class CodecTests: XCTestCase {
 }
 @MainActor final class FakeClock: AppClock {
     var now = Date(timeIntervalSince1970: 0)
-    func sleep(seconds: Double) async throws { now = now.addingTimeInterval(seconds); await Task.yield(); try Task.checkCancellation() }
+    var advancesAutomatically = true
+    func sleep(seconds: Double) async throws {
+        if advancesAutomatically { now = now.addingTimeInterval(seconds) }
+        await Task.yield()
+        try Task.checkCancellation()
+    }
 }
 @MainActor final class FakeHue: HueClientProtocol {
     var lights: [HueLight] = []
@@ -182,11 +269,19 @@ final class CodecTests: XCTestCase {
     func command(_ fields: [String: String]) throws {
         commands.append(fields)
         if confirm {
-            if let value = fields["fpwr"] { snapshot.isOn = value == "ON" }
-            if let value = fields["auto"] { snapshot.autoMode = value == "ON" }
-            if let value = fields["fnsp"] { snapshot.speed = Int(value) }
-            onSnapshot?(snapshot)
+            var state = fields
+            if let lower = fields["osal"], lower == fields["osau"],
+               let mode = fields["oson"].flatMap(DysonOscillation.init(rawValue:)) {
+                state["oson"] = mode.setting(false).rawValue
+            }
+            try receiveState(state)
         }
+    }
+    func receiveState(_ fields: [String: String]) throws {
+        let now = Date()
+        let reply = try DysonCodec.encode(message: "STATE-CHANGE", additional: ["product-state": fields], now: now)
+        snapshot = try DysonCodec.updated(snapshot, payload: Data(reply.utf8), now: now)
+        onSnapshot?(snapshot)
     }
 }
 @MainActor final class StoreTests: XCTestCase {
@@ -259,6 +354,127 @@ final class CodecTests: XCTestCase {
         XCTAssertFalse(store.dysonPending); XCTAssertEqual(store.dyson.speed, 7); XCTAssertTrue(store.dyson.isOn)
         client.onConnection?(.offline, nil); XCTAssertNil(store.badge)
         store.stop()
+    }
+    func testAirflowAndOscillationCommandConfirmation() async throws {
+        let (store, _, client, _, _, _) = fixture()
+        client.snapshot.isOn = true
+        client.snapshot.airflowDirection = .front
+        client.snapshot.oscillation = .legacyOff
+        client.snapshot.oscillationProfile = "0090"
+        client.snapshot.oscillationLowerAngle = 135
+        client.snapshot.oscillationUpperAngle = 225
+        try await store.connectDyson(DysonConfiguration(host: "dyson.local", serial: "ABC-123", topicPrefix: "438M", name: "Dyson"), credential: "credential")
+        defer { store.stop() }
+
+        store.setDyson(["fdir": "OFF"])
+        for _ in 0..<100 where store.dysonPending { await Task.yield() }
+        XCTAssertEqual(client.commands.last, ["fdir": "OFF"])
+        XCTAssertEqual(store.dyson.airflowDirection, .rear)
+        XCTAssertFalse(store.dysonPending)
+        XCTAssertNil(store.dysonError)
+
+        store.setDysonOscillationRange(center: 180, span: 90)
+        for _ in 0..<100 where store.dysonPending { await Task.yield() }
+        XCTAssertEqual(client.commands.last, ["oson": "OION", "ancp": "CUST", "osal": "0135", "osau": "0225"])
+        XCTAssertEqual(store.dyson.oscillation, .legacyOn)
+        XCTAssertFalse(store.dysonPending)
+        XCTAssertNil(store.dysonError)
+
+        store.stopDysonOscillation()
+        for _ in 0..<100 where store.dysonPending { await Task.yield() }
+        XCTAssertEqual(client.commands.last, ["oson": "OIOF"])
+        XCTAssertEqual(store.dyson.oscillation, .legacyOff)
+        XCTAssertEqual(store.dyson.oscillationCenter, 180)
+        XCTAssertNil(store.dyson.fixedOscillationDirection)
+        XCTAssertFalse(store.dysonPending)
+        XCTAssertNil(store.dysonError)
+
+        store.setDysonOscillationRange(center: 107, span: 0)
+        XCTAssertEqual(store.dysonPendingOscillationRange?.center, 105)
+        XCTAssertEqual(store.dyson.oscillationCenter, 180)
+        for _ in 0..<100 where store.dysonPending { await Task.yield() }
+        XCTAssertEqual(client.commands.last, ["oson": "OION", "ancp": "CUST", "osal": "0105", "osau": "0105"])
+        XCTAssertEqual(store.dyson.fixedOscillationDirection, 105)
+        XCTAssertEqual(store.dyson.oscillationEnabled, false)
+        XCTAssertNil(store.dysonPendingOscillationRange)
+        XCTAssertFalse(store.dysonPending)
+        XCTAssertNil(store.dysonError)
+    }
+    func testOscillationRangeRequiresMatchingBoundsAndReportsTimeoutOrDisconnect() async throws {
+        let (store, _, client, _, _, clock) = fixture()
+        clock.advancesAutomatically = false
+        client.snapshot.isOn = true
+        client.snapshot.oscillation = .on
+        client.snapshot.oscillationProfile = "CUST"
+        client.snapshot.oscillationLowerAngle = 135
+        client.snapshot.oscillationUpperAngle = 225
+        client.confirm = false
+        try await store.connectDyson(DysonConfiguration(host: "dyson.local", serial: "ABC-123", topicPrefix: "438", name: "Dyson"), credential: "credential")
+        defer { store.stop() }
+
+        store.setDysonOscillationRange(center: 180, span: 180)
+        store.stopDysonOscillation()
+        for _ in 0..<30 where client.commands.isEmpty { await Task.yield() }
+        XCTAssertEqual(client.commands, [["oson": "ON", "ancp": "CUST", "osal": "0090", "osau": "0270"]])
+        try client.receiveState(["oson": "ON", "ancp": "CUST", "osal": "0135", "osau": "0225"])
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertTrue(store.dysonPending)
+        XCTAssertEqual(store.dysonPendingOscillationRange?.span, 180)
+
+        try client.receiveState(["osal": "0090", "osau": "0270"])
+        for _ in 0..<30 where store.dysonPending { await Task.yield() }
+        XCTAssertFalse(store.dysonPending)
+        XCTAssertNil(store.dysonPendingOscillationRange)
+        XCTAssertEqual(store.dyson.activeOscillationRange?.span, 180)
+
+        store.setDysonOscillationRange(center: 180, span: 90)
+        for _ in 0..<30 where client.commands.count < 2 { await Task.yield() }
+        clock.now = clock.now.addingTimeInterval(11)
+        for _ in 0..<30 where store.dysonPending { await Task.yield() }
+        XCTAssertEqual(store.dysonError, ControlError.timeout.localizedDescription)
+        XCTAssertNil(store.dysonPendingOscillationRange)
+        XCTAssertEqual(store.dyson.activeOscillationRange?.span, 180)
+
+        store.setDysonOscillationRange(center: 200, span: 180)
+        XCTAssertEqual(store.dysonPendingOscillationRange?.center, 200)
+        for _ in 0..<30 where client.commands.count < 3 { await Task.yield() }
+        client.onConnection?(.offline, nil)
+        XCTAssertFalse(store.dysonPending)
+        XCTAssertNil(store.dysonPendingOscillationRange)
+        XCTAssertEqual(store.dysonError, ControlError.offline.localizedDescription)
+        XCTAssertFalse(store.canAdjustDysonOscillation)
+    }
+    func testOscillationPresetAcceptsReportedSpanWithDifferentProfileOrBounds() async throws {
+        let (store, _, client, _, _, clock) = fixture()
+        clock.advancesAutomatically = false
+        client.snapshot.isOn = true
+        client.snapshot.oscillation = .off
+        client.snapshot.oscillationProfile = "CUST"
+        client.snapshot.oscillationLowerAngle = 180
+        client.snapshot.oscillationUpperAngle = 180
+        client.confirm = false
+        try await store.connectDyson(DysonConfiguration(host: "dyson.local", serial: "ABC-123", topicPrefix: "438", name: "Dyson"), credential: "credential")
+        defer { store.stop() }
+
+        store.selectDysonOscillationSpan(45)
+        for _ in 0..<30 where client.commands.isEmpty { await Task.yield() }
+        try client.receiveState(["oson": "ON", "ancp": "0090"])
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertTrue(store.dysonPending)
+        try client.receiveState(["ancp": "0045"])
+        for _ in 0..<30 where store.dysonPending { await Task.yield() }
+        XCTAssertFalse(store.dysonPending)
+        XCTAssertEqual(store.dyson.activeOscillationRange?.span, 45)
+        XCTAssertNil(store.dysonError)
+
+        store.selectDysonOscillationSpan(90)
+        for _ in 0..<30 where client.commands.count < 2 { await Task.yield() }
+        XCTAssertNotEqual(client.commands.last?["osal"], "0130")
+        try client.receiveState(["ancp": "CUST", "osal": "0130", "osau": "0220"])
+        for _ in 0..<30 where store.dysonPending { await Task.yield() }
+        XCTAssertFalse(store.dysonPending)
+        XCTAssertEqual(store.dyson.activeOscillationRange?.span, 90)
+        XCTAssertNil(store.dysonError)
     }
     func testUnconfirmedCommandTimesOut() async throws {
         let (store, _, client, _, _, _) = fixture(); client.confirm = false
@@ -703,6 +919,9 @@ final class AirQualityTests: XCTestCase {
         presentation.showsPollutants = true
         XCTAssertTrue(presentation.closeDetailPopover())
         XCTAssertFalse(presentation.showsPollutants)
+        presentation.showsDysonOscillation = true
+        XCTAssertTrue(presentation.closeDetailPopover())
+        XCTAssertFalse(presentation.showsDysonOscillation)
         presentation.selectedLight = .init(id: "lamp")
         XCTAssertTrue(presentation.closeDetailPopover()); XCTAssertNil(presentation.selectedLight)
         XCTAssertFalse(presentation.closeDetailPopover())

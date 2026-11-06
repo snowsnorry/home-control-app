@@ -45,8 +45,9 @@ struct DysonCard: View {
                         SensorMetric(title: "Humidity", symbol: "humidity", reading: store.dyson.humidity, unit: "%", fraction: 0, connected: store.dysonState == .online, now: store.now)
                         Divider().frame(height: 44)
                         Button {
-                            presentation.selectedLight = nil
-                            presentation.showsPollutants.toggle()
+                            let opening = !presentation.showsPollutants
+                            _ = presentation.closeDetailPopover()
+                            presentation.showsPollutants = opening
                         } label: {
                             SensorMetric(title: LocalizedStringKey(dominantPollutant?.pollutant.title ?? "PM2.5"), symbol: (dominantPollutant?.pollutant ?? .pm25).symbol, reading: dominantPollutant?.reading, unit: dominantPollutant?.pollutant.unit ?? "µg/m³", fraction: dominantPollutant?.pollutant.fraction ?? 0, connected: store.dysonState == .online, now: store.now)
                                 .contentShape(Rectangle())
@@ -57,11 +58,36 @@ struct DysonCard: View {
                                 DysonPollutantsPopover(snapshot: store.dyson, connected: store.dysonState == .online, now: store.now)
                             }
                     }
-                    Toggle("Auto", isOn: Binding(get: { store.dyson.autoMode }, set: { store.setDyson(["auto": $0 ? "ON" : "OFF"]) }))
-                        .toggleStyle(DysonAutoToggleStyle())
+                    HStack(spacing: 8) {
+                        Toggle(isOn: Binding(get: { store.dyson.autoMode }, set: { store.setDyson(["auto": $0 ? "ON" : "OFF"]) })) {
+                            HStack(spacing: 8) {
+                                Image(systemName: store.dyson.autoMode ? "checkmark.circle.fill" : "circle")
+                                    .font(.system(size: 20, weight: .regular))
+                                    .foregroundStyle(store.dyson.autoMode ? DysonControlPill.selectedForeground : Color.secondary)
+                                    .accessibilityHidden(true)
+                                Text("Auto")
+                            }
+                        }
+                        .toggleStyle(DysonPillToggleStyle())
                         .disabled(!enabled)
                         .accessibilityLabel("Purifier mode")
                         .accessibilityValue(store.dyson.autoMode ? Text("Auto") : Text("Manual"))
+
+                        DysonAirflowControl(selection: store.dyson.airflowDirection) { direction in
+                            store.setDyson(["fdir": direction.rawValue])
+                        }
+                        .disabled(!enabled)
+
+                        DysonOscillationButton(enabled: store.dyson.oscillationEnabled, span: store.dyson.activeOscillationRange?.span) {
+                            let opening = !presentation.showsDysonOscillation
+                            _ = presentation.closeDetailPopover()
+                            presentation.showsDysonOscillation = opening
+                        }
+                        .disabled(!store.canAdjustDysonOscillation)
+                        .popover(isPresented: $presentation.showsDysonOscillation, arrowEdge: .trailing) {
+                            DysonOscillationPopover(store: store)
+                        }
+                    }
                     DysonSpeedControl(speed: store.dyson.speed, autoMode: store.dyson.autoMode) { speed in
                         store.setDyson(["auto": "OFF", "fpwr": "ON", "fnsp": String(format: "%04d", speed)])
                     }.disabled(!enabled)
@@ -91,36 +117,102 @@ struct DysonCard: View {
     }
 }
 
-private struct DysonAutoToggleStyle: ToggleStyle {
-    @Environment(\.isEnabled) private var isEnabled
-    private let charcoal = Color(rgb: 0x454746)
-
+private struct DysonPillToggleStyle: ToggleStyle {
     func makeBody(configuration: Configuration) -> some View {
         Button {
             configuration.isOn.toggle()
         } label: {
-            HStack(spacing: 8) {
-                Image(systemName: configuration.isOn ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 20, weight: .regular))
-                    .foregroundStyle(configuration.isOn ? charcoal : Color.secondary)
-                    .accessibilityHidden(true)
-                configuration.label
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(configuration.isOn ? charcoal : Color.primary)
-            }
-            .padding(.horizontal, 12)
-            .frame(height: 32)
-            .background(configuration.isOn ? Color.white : Color.primary.opacity(0.08), in: Capsule())
-            .overlay { Capsule().strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5) }
-            .shadow(color: .black.opacity(configuration.isOn ? 0.08 : 0), radius: 3, y: 1)
-            .contentShape(Capsule())
-            .opacity(isEnabled ? 1 : 0.5)
+            configuration.label
+                .modifier(DysonControlPill(selected: configuration.isOn))
         }
         .buttonStyle(.plain)
         .accessibilityRepresentation {
             Toggle(isOn: configuration.$isOn) { configuration.label }
                 .toggleStyle(.switch)
         }
+    }
+}
+
+struct DysonControlPill: ViewModifier {
+    var selected: Bool
+    @Environment(\.isEnabled) private var isEnabled
+    static let selectedForeground = Color(rgb: 0x454746)
+
+    func body(content: Content) -> some View {
+        content
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(selected ? Self.selectedForeground : Color.primary)
+            .padding(.horizontal, 12)
+            .frame(height: 32)
+            .background(selected ? Color.white : Color.primary.opacity(0.08), in: Capsule())
+            .overlay { Capsule().strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5) }
+            .shadow(color: .black.opacity(selected ? 0.08 : 0), radius: 3, y: 1)
+            .contentShape(Capsule())
+            .opacity(isEnabled ? 1 : 0.5)
+    }
+}
+
+private struct DysonAirflowControl: View {
+    var selection: DysonAirflowDirection?
+    var change: (DysonAirflowDirection) -> Void
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(DysonAirflowDirection.allCases, id: \.self) { direction in
+                let selected = selection == direction
+                let title = direction == .front ? Text("Front airflow") : Text("Rear airflow")
+                Button {
+                    if !selected { change(direction) }
+                } label: {
+                    DysonAirflowIcon(direction: direction)
+                        .fill(selected ? DysonControlPill.selectedForeground : Color.primary, style: FillStyle(eoFill: true))
+                        .frame(width: 20, height: 20)
+                        .frame(width: 32, height: 32)
+                        .background(selected ? Color.white : Color.clear, in: Circle())
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(title)
+                .accessibilityAddTraits(selected ? .isSelected : [])
+                .help(title)
+            }
+        }
+        .background(Color.primary.opacity(0.08), in: Capsule())
+        .overlay { Capsule().strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5) }
+        .opacity(isEnabled ? 1 : 0.5)
+    }
+}
+
+private struct DysonAirflowIcon: Shape {
+    var direction: DysonAirflowDirection
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.addRoundedRect(in: CGRect(x: 7, y: 0, width: 6, height: 13), cornerSize: CGSize(width: 3, height: 3))
+        path.addRoundedRect(in: CGRect(x: 9, y: 2, width: 2, height: 9), cornerSize: CGSize(width: 1, height: 1))
+        path.addRoundedRect(in: CGRect(x: 7, y: 14, width: 6, height: 6), cornerSize: CGSize(width: 1, height: 1))
+        if direction == .front {
+            addArrow(to: &path, tip: CGPoint(x: 1, y: 6.5), size: 5)
+        } else {
+            for y in [2.5, 6.5, 10.5] {
+                addArrow(to: &path, tip: CGPoint(x: 19, y: y), size: 3.5)
+            }
+        }
+        return path.applying(CGAffineTransform(scaleX: rect.width / 20, y: rect.height / 20))
+    }
+
+    private func addArrow(to path: inout Path, tip: CGPoint, size: CGFloat) {
+        let length = direction == .front ? size : -size
+        let shoulder = tip.x + length * 0.6
+        path.move(to: tip)
+        path.addLine(to: CGPoint(x: shoulder, y: tip.y - size / 2))
+        path.addLine(to: CGPoint(x: shoulder, y: tip.y - size / 6))
+        path.addLine(to: CGPoint(x: tip.x + length, y: tip.y - size / 6))
+        path.addLine(to: CGPoint(x: tip.x + length, y: tip.y + size / 6))
+        path.addLine(to: CGPoint(x: shoulder, y: tip.y + size / 6))
+        path.addLine(to: CGPoint(x: shoulder, y: tip.y + size / 2))
+        path.closeSubpath()
     }
 }
 

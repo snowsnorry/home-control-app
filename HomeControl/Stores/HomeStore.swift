@@ -16,6 +16,7 @@ import Observation
     var storageError: String?
     private(set) var pendingLights: Set<String> = []
     private(set) var dysonPending = false
+    private(set) var dysonPendingOscillationRange: DysonOscillationRange?
     @ObservationIgnored private let homeKit: any DysonHomeKitServerProtocol
     @ObservationIgnored private let hue: any HueClientProtocol
     @ObservationIgnored private let dysonClient: any DysonClientProtocol
@@ -34,10 +35,12 @@ import Observation
     private final class DysonCommandRequest {
         var fields: [String: String]
         let isSpeed: Bool
+        let oscillationPresetSpan: Int?
         var completions: [(Result<Void, Error>) -> Void]
         private var finished = false
-        init(fields: [String: String], completion: @escaping (Result<Void, Error>) -> Void) {
+        init(fields: [String: String], oscillationPresetSpan: Int?, completion: @escaping (Result<Void, Error>) -> Void) {
             self.fields = fields; isSpeed = fields["fnsp"] != nil; completions = [completion]
+            self.oscillationPresetSpan = oscillationPresetSpan
         }
         func finish(_ result: Result<Void, Error>) {
             guard !finished else { return }; finished = true
@@ -392,12 +395,46 @@ import Observation
     func setDyson(_ fields: [String: String]) {
         enqueueDyson(fields) { _ in }
     }
-    private func enqueueDyson(_ fields: [String: String], completion: @escaping (Result<Void, Error>) -> Void) {
+    var canAdjustDysonOscillation: Bool {
+        dysonState == .online && dyson.isOn && dyson.oscillation != nil && !dysonPending
+    }
+    func stopDysonOscillation() {
+        guard canAdjustDysonOscillation, dyson.oscillationEnabled == true, let oscillation = dyson.oscillation else { return }
+        sendOscillationCommand(["oson": oscillation.setting(false).rawValue])
+    }
+    func selectDysonOscillationSpan(_ span: Int) {
+        guard DysonOscillationRange.presets.contains(span), dyson.activeOscillationRange?.span != span else { return }
+        applyDysonOscillationRange(center: dyson.oscillationCenter ?? DysonOscillationRange.forward, span: span, selectingPreset: true)
+    }
+    func setDysonOscillationRange(center: Double, span: Int) {
+        applyDysonOscillationRange(center: center, span: span, selectingPreset: false)
+    }
+    private func applyDysonOscillationRange(center: Double, span: Int, selectingPreset: Bool) {
+        guard canAdjustDysonOscillation, let oscillation = dyson.oscillation,
+              let range = DysonOscillationRange(center: center, span: span) else { return }
+        if span == 0, dyson.fixedOscillationDirection == range.center { return }
+        if dyson.activeOscillationRange == range { return }
+        if !selectingPreset { dysonPendingOscillationRange = range }
+        sendOscillationCommand([
+            "oson": oscillation.setting(true).rawValue, "ancp": "CUST",
+            "osal": String(format: "%04d", range.lower), "osau": String(format: "%04d", range.upper)
+        ], presetSpan: selectingPreset ? span : nil)
+    }
+    private func sendOscillationCommand(_ fields: [String: String], presetSpan: Int? = nil) {
+        enqueueDyson(fields, oscillationPresetSpan: presetSpan) { [weak self] result in
+            self?.dysonPendingOscillationRange = nil
+            if case .failure(let error) = result { self?.dysonError = error.localizedDescription }
+        }
+    }
+    private func enqueueDyson(_ fields: [String: String], oscillationPresetSpan: Int? = nil,
+                              completion: @escaping (Result<Void, Error>) -> Void) {
         guard dysonState == .online else { completion(.failure(ControlError.offline)); return }
         // Only adjacent pending speeds can be replaced; power/mode commands are barriers.
         if fields["fnsp"] != nil, let last = dysonQueue.last, last.isSpeed {
             last.fields = fields; last.completions.append(completion)
-        } else { dysonQueue.append(DysonCommandRequest(fields: fields, completion: completion)) }
+        } else {
+            dysonQueue.append(DysonCommandRequest(fields: fields, oscillationPresetSpan: oscillationPresetSpan, completion: completion))
+        }
         dysonPending = true
         guard dysonCommandTask == nil else { return }
         dysonError = nil
@@ -415,14 +452,16 @@ import Observation
                 do {
                     try Task.checkCancellation()
                     guard self.dysonState == .online, self.dysonGeneration == generation else { throw ControlError.offline }
-                    let revision = self.dysonSnapshotRevision
+                    let oscillation = request.fields["oson"] != nil
+                    let revision = oscillation ? self.dyson.oscillationRevision : self.dysonSnapshotRevision
                     let deadline = self.clock.now.addingTimeInterval(10)
                     try self.dysonClient.command(request.fields)
                     while true {
                         try Task.checkCancellation()
                         guard self.dysonCommandEpoch == epoch, self.dysonGeneration == generation,
                               self.dysonState == .online else { throw ControlError.offline }
-                        if self.dysonSnapshotRevision > revision, self.dysonMatches(request.fields) { break }
+                        let received = oscillation ? self.dyson.oscillationRevision : self.dysonSnapshotRevision
+                        if received != revision, self.dysonMatches(request) { break }
                         guard self.clock.now < deadline else { throw ControlError.timeout }
                         try await self.clock.sleep(seconds: 0.1)
                     }
@@ -437,12 +476,28 @@ import Observation
             }
         }
     }
-    private func dysonMatches(_ fields: [String: String]) -> Bool {
-        fields.allSatisfy { key, value in
+    private func dysonMatches(_ request: DysonCommandRequest) -> Bool {
+        if let span = request.oscillationPresetSpan {
+            // Firmware can report a named preset or normalize its limits.
+            return dyson.activeOscillationRange?.span == span
+        }
+        let fields = request.fields
+        return fields.allSatisfy { key, value in
             switch key {
             case "fpwr": return dyson.isOn == (value == "ON")
             case "auto": return dyson.autoMode == (value == "ON")
             case "fnsp": return dyson.speed == Int(value)
+            case "fdir": return dyson.airflowDirection?.rawValue == value
+            case "oson":
+                guard let requested = DysonOscillation(rawValue: value) else { return false }
+                // Equal custom limits aim at a point. Some firmware settles back to OFF.
+                if fields["ancp"] == "CUST", fields["osal"] == fields["osau"], fields["osal"] != nil {
+                    return dyson.oscillation != nil
+                }
+                return dyson.oscillation?.isOn == requested.isOn
+            case "ancp": return dyson.oscillationProfile == value
+            case "osal": return dyson.oscillationLowerAngle == Int(value)
+            case "osau": return dyson.oscillationUpperAngle == Int(value)
             case "rhtm": return dyson.continuousMonitoring == (value == "ON")
             default: return false
             }

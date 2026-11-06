@@ -408,6 +408,39 @@
         }
       }
     },
+    "%@°": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@°"
+          }
+        }
+      }
+    },
+    "%lld°": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld°"
+          }
+        }
+      }
+    },
+    "Adjust oscillation": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Adjust oscillation"
+          }
+        }
+      }
+    },
     "Air quality unavailable": {
       "extractionState": "manual",
       "localizations": {
@@ -547,6 +580,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Choose which Hue scenes appear in the device panel. Nothing is selected automatically."
+          }
+        }
+      }
+    },
+    "Center direction": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Center direction"
+          }
+        }
+      }
+    },
+    "Center position unavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Center position unavailable"
           }
         }
       }
@@ -716,6 +771,17 @@
         }
       }
     },
+    "Done": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Done"
+          }
+        }
+      }
+    },
     "Dyson TP07": {
       "extractionState": "manual",
       "localizations": {
@@ -833,6 +899,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "Fan speed"
+          }
+        }
+      }
+    },
+    "Front airflow": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Front airflow"
           }
         }
       }
@@ -1079,6 +1156,17 @@
         }
       }
     },
+    "Last set center: %@°": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Last set center: %@°"
+          }
+        }
+      }
+    },
     "Manual": {
       "extractionState": "manual",
       "localizations": {
@@ -1277,6 +1365,28 @@
         }
       }
     },
+    "Oscillation": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Oscillation"
+          }
+        }
+      }
+    },
+    "Oscillation controls unavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Oscillation controls unavailable"
+          }
+        }
+      }
+    },
     "Other scenes": {
       "extractionState": "manual",
       "localizations": {
@@ -1460,6 +1570,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "Quit Home Control"
+          }
+        }
+      }
+    },
+    "Rear airflow": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rear airflow"
           }
         }
       }

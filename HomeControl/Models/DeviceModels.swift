@@ -184,10 +184,70 @@ struct DysonPollutantReading {
         pollutant.quality(for: reading.value!)!
     }
 }
+enum DysonAirflowDirection: String, CaseIterable, Sendable {
+    case front = "ON"
+    case rear = "OFF"
+}
+
+enum DysonOscillation: String, Sendable {
+    case on = "ON"
+    case off = "OFF"
+    case legacyOn = "OION"
+    case legacyOff = "OIOF"
+
+    var isOn: Bool { self == .on || self == .legacyOn }
+
+    func setting(_ enabled: Bool) -> Self {
+        switch self {
+        case .on, .off: enabled ? .on : .off
+        case .legacyOn, .legacyOff: enabled ? .legacyOn : .legacyOff
+        }
+    }
+}
+
+struct DysonOscillationRange: Equatable, Sendable {
+    static let presets = [45, 90, 180, 350]
+    static let travel = 5...355
+    static let step = 5
+    static let forward = 180.0
+
+    let lower: Int
+    let upper: Int
+    var span: Int { upper - lower }
+    var center: Double { Double(lower + upper) / 2 }
+    var canMove: Bool { span < 350 && span.isMultiple(of: Self.step) }
+
+    init?(reportedLower: Int?, reportedUpper: Int?) {
+        guard let lower = reportedLower, let upper = reportedUpper,
+              (0...360).contains(lower), (lower...360).contains(upper),
+              lower == upper || (30...350).contains(upper - lower) else { return nil }
+        self.lower = lower
+        self.upper = upper
+    }
+
+    init?(center: Double, span: Int) {
+        guard center.isFinite, span.isMultiple(of: Self.step),
+              span == 0 || (30...350).contains(span) else { return nil }
+        let lowerLimit = Self.travel.lowerBound
+        let upperLimit = Self.travel.upperBound - span
+        let target = min(Double(upperLimit), max(Double(lowerLimit), center - Double(span) / 2))
+        lower = Int((target / Double(Self.step)).rounded()) * Self.step
+        upper = lower + span
+    }
+}
+
 struct DysonSnapshot: Equatable, Sendable {
     var isOn = false
     var autoMode = false
     var speed: Int?
+    var airflowDirection: DysonAirflowDirection?
+    var oscillation: DysonOscillation?
+    var oscillationProfile: String?
+    var oscillationLowerAngle: Int?
+    var oscillationUpperAngle: Int?
+    var oscillationRevision: UInt64 = 0
+    var lastOscillationCenter: Double?
+    var stoppedOscillationAngle: Int?
     var continuousMonitoring = false
     var temperature: SensorReading?
     var humidity: SensorReading?
@@ -196,6 +256,44 @@ struct DysonSnapshot: Equatable, Sendable {
     var voc: SensorReading?
     var nitrogenDioxide: SensorReading?
     var hasState = false
+
+    var reportedOscillationRange: DysonOscillationRange? {
+        DysonOscillationRange(reportedLower: oscillationLowerAngle, reportedUpper: oscillationUpperAngle)
+    }
+
+    var fixedOscillationDirection: Double? {
+        guard oscillationProfile == "CUST", let range = reportedOscillationRange, range.span == 0 else { return nil }
+        return range.center
+    }
+
+    var oscillationEnabled: Bool? {
+        oscillation.map { $0.isOn && fixedOscillationDirection == nil }
+    }
+
+    var canLocateStoppedPosition: Bool {
+        isOn && oscillation?.isOn == false && fixedOscillationDirection == nil
+    }
+
+    var activeOscillationRange: DysonOscillationRange? {
+        guard oscillationEnabled == true else { return nil }
+        return configuredOscillationRange
+    }
+
+    var oscillationCenter: Double? {
+        if oscillationEnabled == true { return activeOscillationRange?.center }
+        return fixedOscillationDirection ?? stoppedOscillationAngle.map(Double.init)
+            ?? lastOscillationCenter ?? configuredOscillationRange?.center
+    }
+
+    private var configuredOscillationRange: DysonOscillationRange? {
+        if let profile = oscillationProfile, let span = Int(profile), DysonOscillationRange.presets.contains(span) {
+            // Named presets can leave the custom limits from the preceding mode in the reply.
+            if let range = reportedOscillationRange, range.span == span { return range }
+            return DysonOscillationRange(center: DysonOscillationRange.forward, span: span)
+        }
+        guard let range = reportedOscillationRange, range.span > 0 else { return nil }
+        return range
+    }
 
     func airQuality(at date: Date, connected: Bool) -> AirQuality? {
         guard connected else { return nil }

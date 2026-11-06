@@ -18,7 +18,7 @@ struct HueLightCard: View {
             Group {
                 if light.supportsBrightness {
                     Button {
-                        presentation.showsPollutants = false
+                        _ = presentation.closeDetailPopover()
                         presentation.selectedLight = .init(id: light.id)
                     } label: { cardLabel }
                         .buttonStyle(.plain).disabled(!enabled)

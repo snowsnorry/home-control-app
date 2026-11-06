@@ -160,6 +160,7 @@ struct NetworkRecoveryPolicy {
     func popoverDidClose(_ notification: Notification) {
         presentation.selectedLight = nil
         presentation.showsPollutants = false
+        presentation.showsDysonOscillation = false
     }
     @objc private func openSettings() { showSettings(nil) }
     private func showSettings(_ kind: DeviceKind?) {

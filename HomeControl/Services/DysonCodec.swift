@@ -11,8 +11,30 @@ enum DysonCodec {
             if let value = string(fields["fpwr"]) { result.isOn = value == "ON" }
             if let value = string(fields["auto"]) { result.autoMode = value == "ON" }
             if let value = string(fields["fnsp"]) { result.speed = Int(value).flatMap { (1...10).contains($0) ? $0 : nil } }
+            if let direction = string(fields["fdir"]).flatMap(DysonAirflowDirection.init(rawValue:)) {
+                result.airflowDirection = direction
+            }
+            let oscillation = string(fields["oson"]).flatMap(DysonOscillation.init(rawValue:))
+            let profile = string(fields["ancp"])
+            let lower = string(fields["osal"]).flatMap(Int.init)
+            let upper = string(fields["osau"]).flatMap(Int.init)
+            if let oscillation { result.oscillation = oscillation }
+            if let profile { result.oscillationProfile = profile }
+            if fields["osal"] != nil { result.oscillationLowerAngle = lower }
+            if fields["osau"] != nil { result.oscillationUpperAngle = upper }
+            if oscillation != nil || profile != nil || lower != nil || upper != nil {
+                result.oscillationRevision &+= 1
+                if let center = result.activeOscillationRange?.center ?? result.fixedOscillationDirection {
+                    result.lastOscillationCenter = center
+                }
+            }
             if let value = string(fields["rhtm"]) { result.continuousMonitoring = value == "ON" }
             if let power = string(fields["fpwr"]), ["ON", "OFF"].contains(power) { result.hasState = true }
+            if !result.canLocateStoppedPosition { result.stoppedOscillationAngle = nil }
+        }
+        if message == "LOCATION", result.canLocateStoppedPosition,
+           let angle = string(object["apos"]).flatMap(Int.init), (0...360).contains(angle) {
+            result.stoppedOscillationAngle = angle
         }
         if message == "ENVIRONMENTAL-CURRENT-SENSOR-DATA", let fields = object["data"] as? [String: Any] {
             if fields["tact"] != nil {

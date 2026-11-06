@@ -6,8 +6,13 @@ import Observation
     struct LightSelection: Identifiable { let id: String }
     var selectedLight: LightSelection?
     var showsPollutants = false
+    var showsDysonOscillation = false
     var preferredPanelHeight: CGFloat?
     func closeDetailPopover() -> Bool {
+        if showsDysonOscillation {
+            showsDysonOscillation = false
+            return true
+        }
         if showsPollutants {
             showsPollutants = false
             return true
