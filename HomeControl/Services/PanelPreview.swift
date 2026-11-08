@@ -48,7 +48,9 @@ import Foundation
                 date: date,
                 pollutants: date <= now && !(42...46).contains(index)
                     ? [.voc: base + peak, .pm25: (base + peak) * 8, .pm10: (base + peak) * 12, .nitrogenDioxide: base] : [:],
-                speed: date <= now && !(50...52).contains(index) ? min(10, (base + peak) * 2.4) : nil
+                speed: date <= now && !(50...52).contains(index) ? min(10, (base + peak) * 2.4) : nil,
+                temperature: date <= now ? 20 + sin(Double(index) / 12) : nil,
+                humidity: date <= now ? 42 - 3 * sin(Double(index) / 12) : nil
             )
         }
         return DysonHistory(samples: samples)

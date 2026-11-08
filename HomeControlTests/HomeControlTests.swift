@@ -241,7 +241,24 @@ final class DysonHistoryTests: XCTestCase {
         XCTAssertEqual(history.samples[1].pollutants[.nitrogenDioxide], 0.8)
         XCTAssertNil(history.samples[1].speed)
         XCTAssertEqual(history.samples[2].speed, 6.2)
+        XCTAssertEqual(history.samples[0].airQualitySeverity ?? -1, 0.62, accuracy: 0.001)
         XCTAssertFalse(history.samples[3].hasReadings)
+    }
+
+    func testClimateHistoryPreservesUnitsAndGapsWithoutPollutants() throws {
+        let json = #"{"start_time":"2026-11-08T00:00:00Z","resolution":"PT15M","tmpm":[2930,2710,9999,null,1,5000],"humm":[44.5,null,101,0]}"#
+        let samples = try JSONDecoder().decode(DysonHistory.self, from: Data(json.utf8)).samples
+        XCTAssertEqual(samples.count, 6)
+        XCTAssertEqual(samples[0].temperature ?? -999, 19.85, accuracy: 0.001)
+        XCTAssertEqual(samples[0].humidity, 44.5)
+        XCTAssertEqual(samples[1].temperature ?? -999, -2.15, accuracy: 0.001)
+        XCTAssertNil(samples[1].humidity)
+        XCTAssertFalse(samples[2].hasReadings)
+        XCTAssertEqual(samples[3].humidity, 0)
+        XCTAssertTrue(samples[3].hasReadings)
+        XCTAssertFalse(samples[4].hasReadings)
+        XCTAssertFalse(samples[5].hasReadings)
+        XCTAssertNil(samples[0].airQualitySeverity)
     }
 
     func testRejectsUnknownResolution() {
