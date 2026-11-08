@@ -92,13 +92,33 @@ struct DysonCard: View {
                         store.setDyson(["auto": "OFF", "fpwr": "ON", "fnsp": String(format: "%04d", speed)])
                     }.disabled(!enabled)
                     HStack(spacing: 6) {
-                        Image(systemName: quality == .good ? "aqi.low" : quality == .fair ? "aqi.medium" : "aqi.high").accessibilityHidden(true)
-                        Text(quality?.title ?? String(localized: "Air quality unavailable")).lineLimit(2)
-                        Spacer(minLength: 0)
-                        if store.dysonPending { ProgressView().controlSize(.mini).accessibilityLabel("Waiting for device confirmation") }
-                    }.font(.caption).foregroundStyle(.secondary).help(pollutantSummary)
+                        HStack(spacing: 6) {
+                            Image(systemName: quality == .good ? "aqi.low" : quality == .fair ? "aqi.medium" : "aqi.high").accessibilityHidden(true)
+                            Text(quality?.title ?? String(localized: "Air quality unavailable")).lineLimit(2)
+                        }
+                        .help(pollutantSummary)
                         .accessibilityElement(children: .combine)
                         .accessibilityHint(pollutantSummary)
+                        Spacer(minLength: 0)
+                        if store.dysonPending { ProgressView().controlSize(.mini).accessibilityLabel("Waiting for device confirmation") }
+                        Button {
+                            let opening = !presentation.showsDysonHistory
+                            _ = presentation.closeDetailPopover()
+                            presentation.showsDysonHistory = opening
+                        } label: {
+                            Image(systemName: "chart.xyaxis.line")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(presentation.showsDysonHistory ? .primary : .secondary)
+                                .frame(width: 26, height: 18)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("Show Dyson history")
+                        .accessibilityLabel("Show Dyson history")
+                        .popover(isPresented: $presentation.showsDysonHistory, arrowEdge: .trailing) {
+                            DysonHistoryPopover(history: store.dysonHistory)
+                        }
+                    }.font(.caption).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity)
             }.padding(14).background(background, in: RoundedRectangle(cornerRadius: 14))
                 .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.75) }

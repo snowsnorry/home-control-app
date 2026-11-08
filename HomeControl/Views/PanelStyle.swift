@@ -7,8 +7,13 @@ import Observation
     var selectedLight: LightSelection?
     var showsPollutants = false
     var showsDysonOscillation = false
+    var showsDysonHistory = false
     var preferredPanelHeight: CGFloat?
     func closeDetailPopover() -> Bool {
+        if showsDysonHistory {
+            showsDysonHistory = false
+            return true
+        }
         if showsDysonOscillation {
             showsDysonOscillation = false
             return true

@@ -1,6 +1,27 @@
 import Foundation
 import Security
 
+/// The same verified MyDyson session is used by setup, diagnostics and history.
+@MainActor struct MyDysonSessions {
+    let secrets: any SecretStoreProtocol
+
+    func read(for serial: String) throws -> String? {
+        let value = try secrets.read(account(for: serial))
+        return value?.isEmpty == false ? value : nil
+    }
+
+    func save(_ token: String, for serial: String) throws {
+        try secrets.write(token, account: account(for: serial))
+    }
+
+    func remove(for serial: String) throws {
+        try secrets.delete(account(for: serial))
+    }
+
+    // Keep the existing Keychain identifier so installed sessions remain usable.
+    private func account(for serial: String) -> String { "dyson-history:\(serial)" }
+}
+
 struct KeychainStore: SecretStoreProtocol {
     nonisolated private let service = "com.homecontrol.mac.credentials"
     nonisolated private func query(_ account: String) -> [String: Any] {

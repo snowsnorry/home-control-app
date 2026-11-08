@@ -31,7 +31,27 @@ import Foundation
         let homeKitMode = arguments.first(where: { $0.hasPrefix("--preview-homekit=") })?.split(separator: "=").last.map(String.init)
         if homeKitMode != nil, persistence.saved.dyson != nil { persistence.saved.dysonHomeKitEnabled = true }
         return HomeStore(hue: hue, dyson: dyson, secrets: PreviewSecrets(), persistence: persistence,
-                         homeKit: PreviewHomeKit(mode: homeKitMode ?? "ready"))
+                         homeKit: PreviewHomeKit(mode: homeKitMode ?? "ready"), historyClient: PreviewHistory())
+    }
+}
+
+@MainActor private final class PreviewHistory: DysonHistoryClientProtocol {
+    func reset() {}
+    func fetchHistory(serial: String, token: String) async throws -> DysonHistory {
+        let now = Date()
+        let start = Calendar.current.startOfDay(for: now)
+        let samples = (0..<96).map { index in
+            let date = start.addingTimeInterval(Double(index) * DysonHistory.interval)
+            let base = 0.8 + 0.6 * sin(Double(index) / 4)
+            let peak = 4 * exp(-pow((Double(index) - 65) / 8, 2))
+            return DysonHistory.Sample(
+                date: date,
+                pollutants: date <= now && !(42...46).contains(index)
+                    ? [.voc: base + peak, .pm25: (base + peak) * 8, .pm10: (base + peak) * 12, .nitrogenDioxide: base] : [:],
+                speed: date <= now && !(50...52).contains(index) ? min(10, (base + peak) * 2.4) : nil
+            )
+        }
+        return DysonHistory(samples: samples)
     }
 }
 

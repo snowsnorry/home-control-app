@@ -206,9 +206,21 @@ final class CodecTests: XCTestCase {
 
 @MainActor final class MemorySecrets: SecretStoreProtocol {
     var values: [String: String] = [:]
-    func read(_ account: String) throws -> String? { values[account] }
-    func write(_ value: String, account: String) throws { values[account] = value }
-    func delete(_ account: String) throws { values[account] = nil }
+    var deletionFails = false
+    var readFails = false
+    var writeFails = false
+    func read(_ account: String) throws -> String? {
+        if readFails { throw ControlError.message("Keychain read failed") }
+        return values[account]
+    }
+    func write(_ value: String, account: String) throws {
+        if writeFails { throw ControlError.message("Keychain write failed") }
+        values[account] = value
+    }
+    func delete(_ account: String) throws {
+        if deletionFails { throw ControlError.authorization }
+        values[account] = nil
+    }
 }
 @MainActor final class MemoryConfiguration: ConfigurationStoreProtocol {
     var saved = SavedConfiguration()
@@ -216,6 +228,427 @@ final class CodecTests: XCTestCase {
     func load() throws -> SavedConfiguration { saved }
     func save(_ value: SavedConfiguration) throws { if fail { throw ControlError.message("test failure") }; saved = value }
 }
+final class DysonHistoryTests: XCTestCase {
+    func testParsesCloudTimeGridWithGapsAndPerMetricUnits() throws {
+        let json = #"{"start_time":"2026-11-08T00:00:00+01:00","resolution":"PT15M","fnsp":[0,null,6.2,11],"p25m":[12.6,null,2],"volm":[24.8],"no2m":[7,8]}"#
+        let history = try JSONDecoder().decode(DysonHistory.self, from: Data(json.utf8))
+        XCTAssertEqual(history.samples.count, 4)
+        XCTAssertEqual(history.samples[0].date.ISO8601Format(), "2026-11-07T23:00:00Z")
+        XCTAssertEqual(history.samples[1].date.timeIntervalSince(history.samples[0].date), 900)
+        XCTAssertEqual(history.samples[0].speed, 0)
+        XCTAssertEqual(history.samples[0].pollutants[.pm25], 12.6)
+        XCTAssertEqual(history.samples[0].pollutants[.voc] ?? -1, 2.48, accuracy: 0.001)
+        XCTAssertEqual(history.samples[1].pollutants[.nitrogenDioxide], 0.8)
+        XCTAssertNil(history.samples[1].speed)
+        XCTAssertEqual(history.samples[2].speed, 6.2)
+        XCTAssertFalse(history.samples[3].hasReadings)
+    }
+
+    func testRejectsUnknownResolution() {
+        let json = #"{"start_time":"2026-11-08T00:00:00Z","resolution":"PT1H","fnsp":[1]}"#
+        XCTAssertThrowsError(try JSONDecoder().decode(DysonHistory.self, from: Data(json.utf8)))
+    }
+}
+
+@MainActor final class DysonHistoryStoreTests: XCTestCase {
+    private final class Client: DysonHistoryClientProtocol {
+        var failure: DysonHistoryHTTPError?
+        var requests: [(serial: String, token: String)] = []
+        var beforeReply: (() -> Void)?
+        func fetchHistory(serial: String, token: String) async throws -> DysonHistory {
+            requests.append((serial, token))
+            beforeReply?()
+            if let failure { throw failure }
+            return DysonHistory(samples: [.init(date: Date(timeIntervalSince1970: 0), pollutants: [.voc: 2], speed: 7)])
+        }
+        func reset() {}
+    }
+
+    func testMyDysonSetupSessionOpensHistoryAcrossLaunchesWithoutAnotherCode() async throws {
+        let secrets = MemorySecrets(), config = MemoryConfiguration(), client = Client(), clock = FakeClock()
+        let store = HomeStore(hue: FakeHue(), dyson: FakeDyson(), secrets: secrets, persistence: config, clock: clock,
+                              historyClient: client)
+        defer { store.stop() }
+        let purifier = DysonConfiguration(host: "dyson.local", serial: "TEST-123", topicPrefix: "438", name: "Dyson")
+        try MyDysonSessions(secrets: secrets).save("setup-token", for: purifier.serial)
+        try await store.connectDyson(purifier, credential: "local-key")
+        XCTAssertEqual(secrets.values["dyson-history:TEST-123"], "setup-token")
+        XCTAssertEqual(secrets.values["dyson"], "local-key")
+
+        let reopened = DysonHistoryStore(client: client, secrets: secrets, clock: clock)
+        try reopened.selectDevice(config.saved.dyson?.serial)
+        reopened.open()
+        await finish(reopened)
+        XCTAssertEqual(client.requests.last?.token, "setup-token")
+        XCTAssertEqual(reopened.data?.samples.first?.speed, 7)
+        XCTAssertNil(reopened.error)
+    }
+
+    func testMissingSessionDoesNotRequestHistoryAndPicksUpLaterLogin() async throws {
+        let client = Client(), secrets = MemorySecrets()
+        let store = DysonHistoryStore(client: client, secrets: secrets, clock: FakeClock())
+        try store.selectDevice("TEST-123")
+        store.open()
+        XCTAssertTrue(client.requests.isEmpty)
+        XCTAssertNotNil(store.error)
+        // A normal or diagnostic login can happen after the popover was first opened.
+        try MyDysonSessions(secrets: secrets).save("account-token", for: "TEST-123")
+        store.open()
+        await finish(store)
+        XCTAssertEqual(client.requests.last?.token, "account-token")
+        XCTAssertNotNil(store.data)
+        XCTAssertNil(store.error)
+    }
+
+    func testTransientFailureRetainsSessionAndRefreshRetries() async throws {
+        let client = Client(), secrets = MemorySecrets()
+        try MyDysonSessions(secrets: secrets).save("account-token", for: "TEST-123")
+        let store = DysonHistoryStore(client: client, secrets: secrets, clock: FakeClock())
+        try store.selectDevice("TEST-123")
+        client.failure = DysonHistoryHTTPError(status: 503)
+        store.open()
+        await finish(store)
+        XCTAssertNil(store.data)
+        XCTAssertEqual(try MyDysonSessions(secrets: secrets).read(for: "TEST-123"), "account-token")
+        client.failure = nil
+        store.refresh()
+        await finish(store)
+        XCTAssertNotNil(store.data)
+        XCTAssertNil(store.error)
+        XCTAssertEqual(client.requests.count, 2)
+    }
+
+    func testOpeningCachedHistoryDoesNotRefetchButRefreshDoes() async throws {
+        let client = Client(), secrets = MemorySecrets(), clock = FakeClock()
+        try MyDysonSessions(secrets: secrets).save("account-token", for: "TEST-123")
+        let store = DysonHistoryStore(client: client, secrets: secrets, clock: clock)
+        try store.selectDevice("TEST-123")
+        store.open()
+        await finish(store)
+        store.open()
+        await finish(store)
+        XCTAssertEqual(client.requests.count, 1)
+        store.refresh()
+        await finish(store)
+        XCTAssertEqual(client.requests.count, 2)
+        clock.now.addTimeInterval(301)
+        store.open()
+        await finish(store)
+        XCTAssertEqual(client.requests.count, 3)
+    }
+
+    func testExpiredSessionPreservesReadingsAndDoesNotDeleteNewerLogin() async throws {
+        let client = Client(), secrets = MemorySecrets()
+        let sessions = MyDysonSessions(secrets: secrets)
+        try sessions.save("old-token", for: "TEST-123")
+        let store = DysonHistoryStore(client: client, secrets: secrets, clock: FakeClock())
+        try store.selectDevice("TEST-123")
+        store.open()
+        await finish(store)
+        client.failure = DysonHistoryHTTPError(status: 401)
+        client.beforeReply = { try! sessions.save("new-token", for: "TEST-123") }
+        store.refresh()
+        await finish(store)
+        XCTAssertEqual(store.data?.samples.first?.speed, 7)
+        XCTAssertNotNil(store.error)
+        XCTAssertEqual(try sessions.read(for: "TEST-123"), "new-token")
+        client.beforeReply = nil
+        client.failure = nil
+        store.open()
+        await finish(store)
+        XCTAssertEqual(client.requests.last?.token, "new-token")
+        XCTAssertNil(store.error)
+    }
+
+    func testRejectedSessionIsNotRetriedAndDoesNotTouchSharedCredentials() async throws {
+        let client = Client(), secrets = MemorySecrets()
+        secrets.values["dyson-history:TEST-123"] = "expired"
+        secrets.values["dyson"] = "local-key"
+        client.failure = DysonHistoryHTTPError(status: 401)
+        let store = DysonHistoryStore(client: client, secrets: secrets, clock: FakeClock())
+        try store.selectDevice("TEST-123")
+        store.open()
+        await finish(store)
+        XCTAssertNotNil(store.error)
+        XCTAssertEqual(secrets.values["dyson-history:TEST-123"], "expired")
+        XCTAssertEqual(secrets.values["dyson"], "local-key")
+        store.open()
+        XCTAssertEqual(client.requests.count, 1)
+    }
+
+    func testKeychainReadFailureCanRetryAndDeviceChangeClearsPreviousData() async throws {
+        let client = Client(), secrets = MemorySecrets()
+        secrets.values["dyson-history:TEST-123"] = "first-token"
+        secrets.values["dyson-history:TEST-456"] = "second-token"
+        let store = DysonHistoryStore(client: client, secrets: secrets, clock: FakeClock())
+        try store.selectDevice("TEST-123")
+        secrets.readFails = true
+        store.open()
+        XCTAssertTrue(client.requests.isEmpty)
+        XCTAssertNotNil(store.error)
+        secrets.readFails = false
+        store.refresh()
+        await finish(store)
+        XCTAssertNotNil(store.data)
+        try store.selectDevice("TEST-456")
+        XCTAssertNil(store.data)
+        XCTAssertNil(secrets.values["dyson-history:TEST-123"])
+        store.open()
+        await finish(store)
+        XCTAssertEqual(client.requests.last?.serial, "TEST-456")
+        XCTAssertEqual(client.requests.last?.token, "second-token")
+    }
+
+    private func finish(_ store: DysonHistoryStore) async {
+        for _ in 0..<200 where store.isBusy { await Task.yield() }
+        XCTAssertFalse(store.isBusy)
+    }
+}
+
+@MainActor final class ConnectionWizardSessionTests: XCTestCase {
+    private final class Cloud: CloudDysonClientProtocol {
+        var delayNext = false
+        var pending: CheckedContinuation<Void, Error>?
+        var saveFails = true
+        var devices: [CloudDysonDevice] = []
+        var didVerify: (() throws -> Void)?
+        var verifyArguments: [(code: String, password: String)] = []
+        func requestCode(email: String, country: String) async throws {}
+        func reset() {}
+        func verify(code: String, password: String) async throws -> (token: String, devices: [CloudDysonDevice]) {
+            verifyArguments.append((code, password))
+            if delayNext {
+                delayNext = false
+                try await withCheckedThrowingContinuation { pending = $0 }
+            }
+            if saveFails { throw MyDysonSessionSaveError() }
+            try didVerify?()
+            return ("test-token", devices)
+        }
+    }
+
+    func testSaveRetryRemainsAvailableAfterClearingPasswordAndCode() async {
+        let cloud = Cloud()
+        let retryWizard = ConnectionWizard(cloud: cloud)
+        retryWizard.password = "test-password"
+        retryWizard.code = "123456"
+        retryWizard.codeSent = true
+        retryWizard.verify()
+        await finish(retryWizard)
+        XCTAssertTrue(retryWizard.sessionSavePending)
+        XCTAssertTrue(retryWizard.password.isEmpty)
+        XCTAssertTrue(retryWizard.code.isEmpty)
+        cloud.saveFails = false
+        retryWizard.verify()
+        await finish(retryWizard)
+        XCTAssertFalse(retryWizard.sessionSavePending)
+        XCTAssertEqual(cloud.verifyArguments.count, 2)
+        XCTAssertEqual(cloud.verifyArguments.last?.password, "")
+        XCTAssertEqual(cloud.verifyArguments.last?.code, "")
+        retryWizard.cancel()
+    }
+
+    func testCancelledVerificationCannotChangeNewFlowsSaveRetryState() async {
+        let cloud = Cloud()
+        cloud.delayNext = true
+        let wizard = ConnectionWizard(cloud: cloud)
+        wizard.verify()
+        for _ in 0..<100 where cloud.pending == nil { await Task.yield() }
+        XCTAssertNotNil(cloud.pending)
+        wizard.cancel()
+        wizard.verify()
+        await finish(wizard)
+        XCTAssertTrue(wizard.sessionSavePending)
+        cloud.pending?.resume(throwing: ControlError.authorization)
+        cloud.pending = nil
+        for _ in 0..<100 { await Task.yield() }
+        XCTAssertTrue(wizard.sessionSavePending)
+        wizard.cancel()
+    }
+
+    private final class History: DysonHistoryClientProtocol {
+        var failure: Int?
+        var failuresByToken: [String: Int] = [:]
+        var tokens: [String] = []
+        var delay = false
+        var pending: CheckedContinuation<Void, Never>?
+        func reset() {}
+        func fetchHistory(serial: String, token: String) async throws -> DysonHistory {
+            tokens.append(token)
+            let responseFailure = failuresByToken[token] ?? failure
+            if delay { await withCheckedContinuation { pending = $0 } }
+            if let responseFailure { throw DysonHistoryHTTPError(status: responseFailure) }
+            return DysonHistory(samples: [.init(date: Date(timeIntervalSince1970: 0), pollutants: [.voc: 2], speed: 8)])
+        }
+    }
+
+    private func recoveryFixture() -> (HomeStore, ConnectionWizard, Cloud, History, MemorySecrets) {
+        let secrets = MemorySecrets(), config = MemoryConfiguration(), history = History(), cloud = Cloud()
+        config.saved.dyson = DysonConfiguration(host: "dyson.local", serial: "TEST-123", topicPrefix: "438", name: "Dyson")
+        secrets.values["dyson"] = "local-key"
+        cloud.saveFails = false
+        cloud.devices = [CloudDysonDevice(serial: "TEST-123", name: "Dyson", topicPrefix: "438", credential: "local-key")]
+        cloud.didVerify = { try MyDysonSessions(secrets: secrets).save("test-token", for: "TEST-123") }
+        let store = HomeStore(hue: FakeHue(), dyson: FakeDyson(), secrets: secrets, persistence: config,
+                              clock: FakeClock(), historyClient: history)
+        let wizard = ConnectionWizard(cloud: cloud)
+        wizard.selected = .dyson
+        return (store, wizard, cloud, history, secrets)
+    }
+
+    func testReconnectRestoresMissingAccountThenLoadsHistoryWithoutRepeatingDeviceSetup() async throws {
+        let (store, wizard, cloud, history, secrets) = recoveryFixture()
+        defer { wizard.cancel(); store.stop() }
+        let original = store.configuration.dyson
+        wizard.reconnect(store: store)
+        await finish(wizard)
+        XCTAssertTrue(wizard.active)
+        XCTAssertTrue(wizard.recoveringDysonAccount)
+        XCTAssertTrue(cloud.verifyArguments.isEmpty)
+        XCTAssertTrue(history.tokens.isEmpty)
+        XCTAssertEqual(store.configuration.dyson, original)
+        wizard.password = "test-password"
+        wizard.code = "123456"
+        wizard.codeSent = true
+        wizard.verify(store: store)
+        await finish(wizard)
+        XCTAssertFalse(wizard.active)
+        XCTAssertFalse(wizard.recoveringDysonAccount)
+        XCTAssertTrue(wizard.success)
+        XCTAssertNil(wizard.error)
+        XCTAssertEqual(store.dysonHistory.data?.samples.first?.speed, 8)
+        XCTAssertEqual(history.tokens, ["test-token"])
+        XCTAssertEqual(store.configuration.dyson, original)
+        XCTAssertEqual(secrets.values["dyson"], "local-key")
+        XCTAssertTrue(wizard.password.isEmpty)
+        XCTAssertTrue(wizard.code.isEmpty)
+    }
+
+    func testReconnectWithSavedSessionLoadsHistoryWithoutOpeningLogin() async throws {
+        let (store, wizard, cloud, history, secrets) = recoveryFixture()
+        defer { wizard.cancel(); store.stop() }
+        secrets.values["dyson-history:TEST-123"] = "saved-token"
+        wizard.reconnect(store: store)
+        await finish(wizard)
+        XCTAssertFalse(wizard.active)
+        XCTAssertFalse(wizard.recoveringDysonAccount)
+        XCTAssertTrue(cloud.verifyArguments.isEmpty)
+        XCTAssertEqual(history.tokens, ["saved-token"])
+        XCTAssertNotNil(store.dysonHistory.data)
+    }
+
+    func testReconnectRoutesRejectedSessionToRecoveryButNotServiceOrKeychainErrors() async throws {
+        let (store, wizard, _, history, secrets) = recoveryFixture()
+        defer { wizard.cancel(); store.stop() }
+        secrets.values["dyson-history:TEST-123"] = "saved-token"
+        history.failure = 503
+        wizard.reconnect(store: store)
+        await finish(wizard)
+        XCTAssertFalse(wizard.active)
+        XCTAssertFalse(store.dysonHistory.needsAccountConnection)
+        XCTAssertNotNil(store.dysonHistory.error)
+        history.failure = nil
+        secrets.readFails = true
+        wizard.reconnect(store: store)
+        await finish(wizard)
+        XCTAssertFalse(wizard.active)
+        XCTAssertFalse(store.dysonHistory.needsAccountConnection)
+        secrets.readFails = false
+        history.failure = 401
+        wizard.reconnect(store: store)
+        await finish(wizard)
+        XCTAssertTrue(wizard.active)
+        XCTAssertTrue(wizard.recoveringDysonAccount)
+        XCTAssertEqual(secrets.values["dyson"], "local-key")
+    }
+
+    func testRecoveryRejectsDifferentAccountWithoutReplacingConnectedDevice() async {
+        let (store, wizard, cloud, history, secrets) = recoveryFixture()
+        defer { wizard.cancel(); store.stop() }
+        let original = store.configuration.dyson
+        wizard.reconnect(store: store)
+        await finish(wizard)
+        cloud.devices = [CloudDysonDevice(serial: "OTHER", name: "Other", topicPrefix: "438", credential: "other-key")]
+        cloud.didVerify = nil
+        wizard.verify(store: store)
+        await finish(wizard)
+        XCTAssertTrue(wizard.active)
+        XCTAssertTrue(wizard.recoveringDysonAccount)
+        XCTAssertNotNil(wizard.error)
+        XCTAssertFalse(wizard.success)
+        XCTAssertTrue(history.tokens.isEmpty)
+        XCTAssertEqual(store.configuration.dyson, original)
+        XCTAssertEqual(secrets.values["dyson"], "local-key")
+    }
+
+    func testCancelledReconnectDoesNotOpenRecoveryAfterLateHistoryFailure() async {
+        let (store, wizard, _, history, secrets) = recoveryFixture()
+        defer { wizard.cancel(); store.stop() }
+        secrets.values["dyson-history:TEST-123"] = "saved-token"
+        history.delay = true
+        history.failure = 401
+        wizard.reconnect(store: store)
+        for _ in 0..<200 where history.pending == nil { await Task.yield() }
+        XCTAssertNotNil(history.pending)
+        wizard.cancel()
+        wizard.showsGeneral = true
+        history.pending?.resume()
+        history.pending = nil
+        for _ in 0..<100 { await Task.yield() }
+        XCTAssertFalse(wizard.active)
+        XCTAssertFalse(wizard.recoveringDysonAccount)
+        XCTAssertTrue(wizard.showsGeneral)
+    }
+
+    func testReconnectRereadsNewSessionAfterOlderInFlightRequestFails() async {
+        let (store, wizard, cloud, history, secrets) = recoveryFixture()
+        defer { wizard.cancel(); store.stop() }
+        secrets.values["dyson-history:TEST-123"] = "old-token"
+        history.delay = true
+        history.failuresByToken["old-token"] = 401
+        store.dysonHistory.open()
+        for _ in 0..<200 where history.pending == nil { await Task.yield() }
+        XCTAssertNotNil(history.pending)
+        secrets.values["dyson-history:TEST-123"] = "new-token"
+        wizard.reconnect(store: store)
+        for _ in 0..<20 { await Task.yield() }
+        history.delay = false
+        history.pending?.resume()
+        history.pending = nil
+        await finish(wizard)
+        XCTAssertEqual(history.tokens, ["old-token", "new-token"])
+        XCTAssertNotNil(store.dysonHistory.data)
+        XCTAssertNil(store.dysonHistory.error)
+        XCTAssertFalse(wizard.active)
+        XCTAssertFalse(wizard.recoveringDysonAccount)
+        XCTAssertTrue(cloud.verifyArguments.isEmpty)
+    }
+
+    func testPostRecoveryHistoryFailureIsNotCopiedIntoWizardAndClearsOnRetry() async throws {
+        let (store, wizard, _, history, _) = recoveryFixture()
+        defer { wizard.cancel(); store.stop() }
+        wizard.reconnect(store: store)
+        await finish(wizard)
+        history.failure = 503
+        wizard.verify(store: store)
+        await finish(wizard)
+        XCTAssertFalse(wizard.active)
+        XCTAssertFalse(wizard.success)
+        XCTAssertNil(wizard.error)
+        XCTAssertNotNil(store.dysonHistory.error)
+        history.failure = nil
+        try await store.dysonHistory.refreshAndWait()
+        XCTAssertNotNil(store.dysonHistory.data)
+        XCTAssertNil(store.dysonHistory.error)
+        XCTAssertNil(wizard.error)
+    }
+
+    private func finish(_ wizard: ConnectionWizard) async {
+        for _ in 0..<200 where wizard.busy { await Task.yield() }
+        XCTAssertFalse(wizard.busy)
+    }
+}
+
 @MainActor final class FakeClock: AppClock {
     var now = Date(timeIntervalSince1970: 0)
     var advancesAutomatically = true
@@ -505,9 +938,9 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
 @MainActor final class MyDysonTests: XCTestCase {
     // Synthetic ciphertext for {"apPasswordHash":"test-credential"}.
     private let encrypted = "juMwpAl06WHHsg7JAUz6Xem4FN8/1ZpVzLxcTfMlWw1lk/mxbhAbrl7nFB/aBLEk"
-    func client() -> MyDysonClient {
+    func client(secrets: MemorySecrets = MemorySecrets()) -> MyDysonClient {
         let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [StubURLProtocol.self]
-        return MyDysonClient(sessionConfiguration: config)
+        return MyDysonClient(sessionConfiguration: config, secrets: secrets)
     }
     func testKnownCredentialFixtureAndFirmwareTopicVariant() throws {
         XCTAssertEqual(try MyDysonClient.decryptCredential(encrypted), "test-credential")
@@ -529,11 +962,61 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
             default: return (404, Data())
             }
         }
-        let client = client(); try await client.requestCode(email: "test@example.com", country: "CZ")
-        let devices = try await client.verify(code: "123456", password: "test-password")
-        XCTAssertEqual(devices.count, 1)
-        do { _ = try await client.verify(code: "123456", password: "test-password"); XCTFail("Session must be cleared") } catch { }
+        let secrets = MemorySecrets()
+        // Use one persisted session across distinct clients, as setup and history do.
+        let login = client(secrets: secrets)
+        try await login.requestCode(email: "test@example.com", country: "CZ")
+        let session = try await login.verify(code: "123456", password: "test-password")
+        XCTAssertEqual(session.devices.count, 1)
+        XCTAssertEqual(session.token, "test-token")
+        XCTAssertEqual(try MyDysonSessions(secrets: secrets).read(for: "ABC-123"), "test-token")
+        do { _ = try await login.verify(code: "123456", password: "test-password"); XCTFail("Challenge must be cleared") } catch { }
+        // From this point any second login request fails the test.
+        StubURLProtocol.install { request in
+            XCTAssertEqual(request.url?.path, "/v1/messageprocessor/devices/ABC-123/environmentdata/daily")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-token")
+            return (200, Data(#"{"start_time":"2026-11-08T00:00:00Z","resolution":"PT15M","volm":[20],"fnsp":[7]}"#.utf8))
+        }
+        let history = DysonHistoryStore(client: client(secrets: secrets), secrets: secrets, clock: FakeClock())
+        try history.selectDevice("ABC-123")
+        history.open()
+        for _ in 0..<100 where history.isBusy { try await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertNil(history.error)
+        XCTAssertEqual(history.data?.samples.first?.speed, 7)
+        XCTAssertEqual(history.data?.samples.first?.pollutants[.voc], 2)
     }
+    func testFailedSessionSaveRetriesWithoutAnotherAuthenticationRequest() async throws {
+        let encrypted = encrypted
+        StubURLProtocol.install { request in
+            switch request.url!.path {
+            case "/v1/provisioningservice/application/Android/version": return (200, Data())
+            case "/v3/userregistration/email/userstatus": return (200, Data(#"{"accountStatus":"ACTIVE"}"#.utf8))
+            case "/v3/userregistration/email/auth": return (200, Data(#"{"challengeId":"challenge"}"#.utf8))
+            case "/v3/userregistration/email/verify": return (200, Data(#"{"token":"test-token"}"#.utf8))
+            case "/v2/provisioningservice/manifest":
+                return (200, Data("[{\"Serial\":\"ABC-123\",\"ProductType\":\"438M\",\"LocalCredentials\":\"\(encrypted)\"}]".utf8))
+            default: return (404, Data())
+            }
+        }
+        let secrets = MemorySecrets()
+        let savingLogin = client(secrets: secrets)
+        secrets.writeFails = true
+        try await savingLogin.requestCode(email: "test@example.com", country: "CZ")
+        do {
+            _ = try await savingLogin.verify(code: "123456", password: "test-password")
+            XCTFail("A failed save must be reported")
+        } catch { XCTAssertTrue(error is MyDysonSessionSaveError) }
+        XCTAssertNil(secrets.values["dyson-history:ABC-123"])
+        StubURLProtocol.install { _ in
+            XCTFail("Retrying a verified session must not send any HTTP request")
+            return (500, Data())
+        }
+        secrets.writeFails = false
+        let session = try await savingLogin.verify(code: "", password: "")
+        XCTAssertEqual(session.token, "test-token")
+        XCTAssertEqual(try MyDysonSessions(secrets: secrets).read(for: "ABC-123"), "test-token")
+    }
+
     func testRateLimitIsActionable() async {
         StubURLProtocol.install { request in
             if request.url!.path.contains("version") { return (200, Data()) }

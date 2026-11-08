@@ -22,6 +22,9 @@ import OSLog
     }
     var onSnapshot: (@MainActor (DysonSnapshot) -> Void)?
     var onConnection: (@MainActor (ConnectionState, String?) -> Void)?
+    #if DEBUG
+    var onDiagnosticMessage: (@MainActor (Data) -> Void)?
+    #endif
     private var mqtt: CocoaMQTT?
     private var configuration: DysonConfiguration?
     private var snapshot = DysonSnapshot()
@@ -68,10 +71,13 @@ import OSLog
             let data = Data(message.payload)
             Task { @MainActor in
                 guard let self, self.generation == generation else { return }
+                #if DEBUG
+                self.onDiagnosticMessage?(data)
+                #endif
                 do {
                     let previous = self.snapshot
                     self.snapshot = try DysonCodec.updated(previous, payload: data, now: Date())
-                    if self.snapshot.canLocateStoppedPosition && !previous.canLocateStoppedPosition {
+                    if self.shouldLocateStoppedPosition && self.snapshot.canLocateStoppedPosition && !previous.canLocateStoppedPosition {
                         self.publish(message: "LOCATE", additional: ["mode-reason": "LAPP"], qos: .qos1)
                     }
                     self.onSnapshot?(self.snapshot)
@@ -109,6 +115,13 @@ import OSLog
     private func finish(_ result: Result<Void, Error>) {
         timeout?.cancel(); timeout = nil
         let pending = continuation; continuation = nil; pending?.resume(with: result)
+    }
+    private var shouldLocateStoppedPosition: Bool {
+        #if DEBUG
+        return onDiagnosticMessage == nil
+        #else
+        return true
+        #endif
     }
     func disconnect() {
         generation = UUID(); subscribed = false

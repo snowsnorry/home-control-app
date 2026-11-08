@@ -67,15 +67,19 @@ struct SettingsView: View {
                 Text("Keeps temperature and humidity monitoring active while the fan is in standby.").font(.caption).foregroundStyle(.secondary)
             }
             HStack {
-                Button("Reconnect") { store.reconnect(wizard.selected) }
-                Button("Set Up Again…") { wizard.begin(wizard.selected) }
-                Button("Remove Connection", role: .destructive) { store.remove(wizard.selected) }
+                Button("Reconnect") { wizard.reconnect(store: store) }
+                    .disabled(wizard.busy)
+                Button("Set Up Again…") { wizard.begin(wizard.selected) }.disabled(wizard.busy)
+                Button("Remove Connection", role: .destructive) { store.remove(wizard.selected) }.disabled(wizard.busy)
             }
         } else {
             Text(wizard.selected == .hue ? "Connect a Hue Bridge on your local network." : "Connect the TP07 already set up in MyDyson.").foregroundStyle(.secondary)
             Button("Connect") { wizard.begin(wizard.selected) }.buttonStyle(.borderedProminent)
         }
         if let error = wizard.selected == .hue ? store.hueError : store.dysonError { ErrorNotice(message: error) }
+        if wizard.selected == .dyson, let error = store.dysonHistory.error {
+            ErrorNotice(message: error)
+        }
         if wizard.selected == .hue, store.configuration.hue != nil { HueSceneSettings(store: store) }
         if wizard.selected == .dyson { DysonHomeKitSettings(store: store) }
     }
@@ -95,14 +99,20 @@ struct SettingsView: View {
         }
     }
     @ViewBuilder private var dysonWizard: some View {
-        Picker("Setup method", selection: $wizard.manualDyson) {
-            Text("MyDyson").tag(false)
-            Text("Manual").tag(true)
-        }.pickerStyle(.segmented).disabled(wizard.busy)
-            .onChange(of: wizard.manualDyson) { _, _ in
-                let manual = wizard.manualDyson
-                wizard.begin(.dyson); wizard.manualDyson = manual
-            }
+        if wizard.recoveringDysonAccount {
+            Text("Restore MyDyson connection").font(.headline)
+            Text("Sign in to restore the saved account connection and load history for your connected purifier.")
+                .font(.caption).foregroundStyle(.secondary)
+        } else {
+            Picker("Setup method", selection: $wizard.manualDyson) {
+                Text("MyDyson").tag(false)
+                Text("Manual").tag(true)
+            }.pickerStyle(.segmented).disabled(wizard.busy)
+                .onChange(of: wizard.manualDyson) { _, _ in
+                    let manual = wizard.manualDyson
+                    wizard.begin(.dyson); wizard.manualDyson = manual
+                }
+        }
         if wizard.manualDyson {
             Text("Use the device's local MQTT credentials, not your home Wi-Fi password.").font(.caption).foregroundStyle(.secondary)
             discovery(kind: .dyson)
@@ -127,12 +137,14 @@ struct SettingsView: View {
             if wizard.codeSent {
                 SecureField("MyDyson password", text: $wizard.password)
                 TextField("Verification code from email", text: $wizard.code)
-                Button("Sign In") { wizard.verify() }.buttonStyle(.borderedProminent).disabled(wizard.busy || wizard.password.isEmpty || wizard.code.isEmpty)
+                Button(wizard.sessionSavePending ? "Retry Save" : "Sign In") { wizard.verify(store: store) }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(wizard.busy || (!wizard.sessionSavePending && (wizard.password.isEmpty || wizard.code.isEmpty)))
                 Button("Send a New Code") { wizard.requestCode() }.disabled(wizard.busy)
             } else {
                 Button("Send Verification Code") { wizard.requestCode() }.buttonStyle(.borderedProminent).disabled(wizard.busy || wizard.email.isEmpty)
             }
-            Text("MyDyson is used only to retrieve local device credentials. Your password and verification code are not saved.").font(.caption).foregroundStyle(.secondary)
+            Text("One MyDyson sign-in connects the purifier and enables its history. The session is saved in Keychain.").font(.caption).foregroundStyle(.secondary)
         }
     }
     private func discovery(kind: DeviceKind) -> some View {

@@ -10,8 +10,8 @@ CONFIGURATION="Debug"
 SIGNING_IDENTITY="${HOME_CONTROL_SIGNING_IDENTITY:--}"
 case "$MODE" in
   --app-build|--app) CONFIGURATION="Release" ;;
-  run|--debug|--logs|--telemetry|--verify) ;;
-  *) echo "usage: $0 [--app-build|--app|run|--debug|--logs|--telemetry|--verify]" >&2; exit 2 ;;
+  run|--debug|--logs|--telemetry|--verify|--dyson-diagnostic) ;;
+  *) echo "usage: $0 [--app-build|--app|run|--debug|--logs|--telemetry|--verify|--dyson-diagnostic]" >&2; exit 2 ;;
 esac
 
 # Give each local build distinct version metadata instead of reinstalling every change
@@ -32,6 +32,13 @@ done
 # Build first so a compiler error leaves the running app available.
 xcodebuild -project "$ROOT_DIR/HomeControl.xcodeproj" -scheme HomeControl -configuration "$CONFIGURATION" -derivedDataPath "$ROOT_DIR/build" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$SIGNING_IDENTITY" build
 APP_BUNDLE="$ROOT_DIR/build/Build/Products/$CONFIGURATION/$APP_NAME.app"
+
+if [[ "$MODE" == "--dyson-diagnostic" ]]; then
+  REPORT_DIR="$(mktemp -d /tmp/dyson-tp07.XXXXXX)"
+  /usr/bin/open -n "$APP_BUNDLE" --args --dyson-diagnostic "$REPORT_DIR"
+  echo "Dyson diagnostic reports: $REPORT_DIR"
+  exit 0
+fi
 
 stop_app() {
   if pgrep -u "$(id -u)" -x "$APP_NAME" >/dev/null 2>&1; then

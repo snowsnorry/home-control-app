@@ -18,7 +18,11 @@ import Foundation
 }
 @MainActor protocol CloudDysonClientProtocol: AnyObject {
     func requestCode(email: String, country: String) async throws
-    func verify(code: String, password: String) async throws -> [CloudDysonDevice]
+    func verify(code: String, password: String) async throws -> (token: String, devices: [CloudDysonDevice])
+    func reset()
+}
+@MainActor protocol DysonHistoryClientProtocol: AnyObject {
+    func fetchHistory(serial: String, token: String) async throws -> DysonHistory
     func reset()
 }
 @MainActor protocol SecretStoreProtocol {

@@ -18,6 +18,17 @@ struct NetworkRecoveryPolicy {
 @main enum HomeControlApp {
     @MainActor static func main() {
         let application = NSApplication.shared
+        #if DEBUG
+        if let index = CommandLine.arguments.firstIndex(of: "--dyson-diagnostic"),
+           CommandLine.arguments.indices.contains(index + 1) {
+            let directory = URL(filePath: CommandLine.arguments[index + 1], directoryHint: .isDirectory)
+            let delegate = DysonDiagnosticDelegate(directory: directory)
+            application.delegate = delegate
+            application.setActivationPolicy(.regular)
+            withExtendedLifetime(delegate) { application.run() }
+            return
+        }
+        #endif
         if CommandLine.arguments.contains("--diagnose-bonjour") {
             let diagnostic = BonjourDiagnostic()
             application.setActivationPolicy(.accessory)
@@ -31,6 +42,48 @@ struct NetworkRecoveryPolicy {
         withExtendedLifetime(delegate) { application.run() }
     }
 }
+
+@MainActor private func editMenuItem() -> NSMenuItem {
+    let item = NSMenuItem()
+    let menu = NSMenu(title: "Edit")
+    item.submenu = menu
+    for (title, action, key) in [("Cut", "cut:", "x"), ("Copy", "copy:", "c"), ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a")] {
+        menu.addItem(withTitle: String(localized: String.LocalizationValue(title)), action: Selector(action), keyEquivalent: key)
+    }
+    return item
+}
+
+#if DEBUG
+@MainActor private final class DysonDiagnosticDelegate: NSObject, NSApplicationDelegate {
+    let experiment: DysonDiagnostic
+    private var window: NSWindow?
+
+    init(directory: URL) { experiment = DysonDiagnostic(directory: directory) }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        let menu = NSMenu()
+        let item = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "Завершить эксперимент", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        item.submenu = appMenu
+        menu.addItem(item)
+        menu.addItem(editMenuItem())
+        NSApp.mainMenu = menu
+
+        let window = NSWindow(contentViewController: NSHostingController(rootView: DysonDiagnosticView(experiment: experiment)))
+        window.title = "Эксперимент Dyson TP07"
+        window.styleMask = [.titled, .closable, .miniaturizable]
+        window.isReleasedWhenClosed = false
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        self.window = window
+        NSApp.activate()
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    func applicationWillTerminate(_ notification: Notification) { experiment.stopLive() }
+}
+#endif
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPopoverDelegate {
     private let store: HomeStore
@@ -116,11 +169,7 @@ struct NetworkRecoveryPolicy {
         let settings = NSMenuItem(title: String(localized: "Settings…"), action: #selector(openSettings), keyEquivalent: ","); settings.target = self
         app.addItem(settings); app.addItem(.separator())
         app.addItem(withTitle: String(localized: "Quit Home Control"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        let editItem = NSMenuItem(); let edit = NSMenu(title: "Edit"); editItem.submenu = edit
-        for (title, action, key) in [("Cut", "cut:", "x"), ("Copy", "copy:", "c"), ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a")] {
-            edit.addItem(withTitle: String(localized: String.LocalizationValue(title)), action: Selector(action), keyEquivalent: key)
-        }
-        main.addItem(editItem); NSApp.mainMenu = main
+        main.addItem(editMenuItem()); NSApp.mainMenu = main
     }
     private func updateBadge() {
         let badge = store.badge
@@ -161,6 +210,7 @@ struct NetworkRecoveryPolicy {
         presentation.selectedLight = nil
         presentation.showsPollutants = false
         presentation.showsDysonOscillation = false
+        presentation.showsDysonHistory = false
     }
     @objc private func openSettings() { showSettings(nil) }
     private func showSettings(_ kind: DeviceKind?) {

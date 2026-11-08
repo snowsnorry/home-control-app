@@ -9,6 +9,7 @@ import Observation
     private(set) var scenes: [HueScene] = []
     private(set) var pendingSceneID: String?
     private(set) var dyson = DysonSnapshot()
+    let dysonHistory: DysonHistoryStore
     private(set) var homeKitStatus = DysonHomeKitStatus()
     private(set) var now: Date
     var hueError: String?
@@ -54,11 +55,14 @@ import Observation
     @ObservationIgnored private var dysonSnapshotRevision: UInt64 = 0
 
     init(hue: any HueClientProtocol = HueClient(), dyson: any DysonClientProtocol = DysonClient(),
-         secrets: any SecretStoreProtocol = KeychainStore(), persistence: any ConfigurationStoreProtocol = FileConfigurationStore(), clock: any AppClock = SystemClock(), homeKit: any DysonHomeKitServerProtocol = DysonHomeKitServer()) {
+         secrets: any SecretStoreProtocol = KeychainStore(), persistence: any ConfigurationStoreProtocol = FileConfigurationStore(), clock: any AppClock = SystemClock(), homeKit: any DysonHomeKitServerProtocol = DysonHomeKitServer(),
+         historyClient: any DysonHistoryClientProtocol = MyDysonClient()) {
         self.homeKit = homeKit
+        dysonHistory = DysonHistoryStore(client: historyClient, secrets: secrets, clock: clock)
         self.hue = hue; self.dysonClient = dyson; self.secrets = secrets; self.persistence = persistence; self.clock = clock
         now = clock.now
         do { configuration = try persistence.load() } catch { storageError = error.localizedDescription }
+        updateDysonHistoryDevice()
         homeKit.onStatus = { [weak self] status in
             guard let self else { return }
             // Ignore queued running statuses after the preference has been disabled.
@@ -189,6 +193,7 @@ import Observation
     func stop() {
         hueTask?.cancel(); dysonTask?.cancel(); timer?.cancel(); cancelCommands()
         homeKit.stop()
+        dysonHistory.stop()
         dysonClient.disconnect(); started = false
     }
     private func cancelCommands() {
@@ -288,6 +293,7 @@ import Observation
             try Task.checkCancellation()
             var updated = configuration; updated.dyson = config
             try commit(updated, account: "dyson", secret: credential)
+            updateDysonHistoryDevice()
             maintainDyson(alreadyConnected: true)
         } catch { reconnect(.dyson); throw error }
     }
@@ -305,11 +311,18 @@ import Observation
             var updated = configuration
             if kind == .hue { updated.hue = nil } else { updated.dyson = nil; updated.dysonHomeKitEnabled = false }
             try commit(updated, account: kind.rawValue, secret: nil)
-            if kind == .dyson { homeKit.stop(); homeKitStatus = DysonHomeKitStatus() }
+            if kind == .dyson {
+                updateDysonHistoryDevice()
+                homeKit.stop(); homeKitStatus = DysonHomeKitStatus()
+            }
             cancelCommands()
             if kind == .hue { lights = []; scenes = []; hueError = nil } else { dyson = DysonSnapshot(); dysonError = nil }
             reconnect(kind)
         } catch { storageError = error.localizedDescription }
+    }
+    private func updateDysonHistoryDevice() {
+        do { try dysonHistory.selectDevice(configuration.dyson?.serial) }
+        catch { storageError = error.localizedDescription }
     }
     func setLight(_ light: HueLight, on: Bool? = nil, brightness: Double? = nil) {
         guard hueState == .online, pendingSceneID == nil, light.reachable,
