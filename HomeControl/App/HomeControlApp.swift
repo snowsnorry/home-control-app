@@ -105,7 +105,8 @@ struct NetworkRecoveryPolicy {
     private var networkRecovery = NetworkRecoveryPolicy()
     private var badgeTask: Task<Void, Never>?
     private var lastBadge: String?
-    private var escapeMonitor: Any?
+    private var panelEventMonitor: Any?
+    private var outsideClickMonitor: Any?
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if DEBUG
         if let theme = CommandLine.arguments.first(where: { $0.hasPrefix("--preview-theme=") }), CommandLine.arguments.contains("--preview-panel") {
@@ -124,7 +125,8 @@ struct NetworkRecoveryPolicy {
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
             button.toolTip = String(localized: "Home Control")
         }
-        popover.behavior = .transient
+        // A nested SwiftUI popover can take over AppKit's transient dismissal.
+        popover.behavior = .applicationDefined
         popover.delegate = self
         popover.contentSize = NSSize(width: 480, height: 464)
         popover.contentViewController = NSHostingController(rootView: makeDevicePanel())
@@ -145,13 +147,6 @@ struct NetworkRecoveryPolicy {
                 self?.updateBadge()
                 try? await Task.sleep(for: .seconds(1))
             }
-        }
-        escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if event.keyCode == 53, self?.popover.isShown == true {
-                if self?.presentation.closeDetailPopover() != true { self?.popover.performClose(nil) }
-                return nil
-            }
-            return event
         }
         installApplicationMenu()
         #if DEBUG
@@ -179,13 +174,13 @@ struct NetworkRecoveryPolicy {
     }
     @objc private func statusClicked(_ sender: NSStatusBarButton) {
         if NSApp.currentEvent?.type == .rightMouseUp || NSApp.currentEvent?.modifierFlags.contains(.control) == true {
-            popover.performClose(nil)
+            closePanel()
             let menu = NSMenu()
             let settings = NSMenuItem(title: String(localized: "Settings…"), action: #selector(openSettings), keyEquivalent: ","); settings.target = self
             menu.addItem(settings); menu.addItem(.separator())
             menu.addItem(withTitle: String(localized: "Quit"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
             menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height), in: sender)
-        } else if popover.isShown { popover.performClose(nil) }
+        } else if popover.isShown { closePanel() }
         else {
             let height = max(1, (sender.window?.screen?.visibleFrame.height ?? 740) - 40)
             popover.contentSize = NSSize(width: 480, height: min(popover.contentSize.height, height))
@@ -206,15 +201,50 @@ struct NetworkRecoveryPolicy {
             self.popover.animates = animates
         }, openSettings: { [weak self] in self?.showSettings($0) })
     }
-    func popoverDidClose(_ notification: Notification) {
+    func popoverWillShow(_ notification: Notification) {
+        let clicks: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: clicks) { [weak self] _ in
+            self?.closePanel()
+        }
+        panelEventMonitor = NSEvent.addLocalMonitorForEvents(matching: clicks.union(.keyDown)) { [weak self] event in
+            guard let self, self.popover.isShown else { return event }
+            if event.type == .keyDown {
+                guard event.keyCode == 53 else { return event }
+                if !self.presentation.closeDetailPopover() { self.closePanel() }
+                return nil
+            }
+            // Settings is the only other app window. Let SwiftUI handle clicks
+            // between a detail and its parent, and let the status button toggle the panel.
+            if let settingsWindow = self.settingsWindow, event.window === settingsWindow {
+                self.closePanel()
+            }
+            return event
+        }
+    }
+    private func stopMonitoringPanelEvents() {
+        if let panelEventMonitor { NSEvent.removeMonitor(panelEventMonitor) }
+        if let outsideClickMonitor { NSEvent.removeMonitor(outsideClickMonitor) }
+        panelEventMonitor = nil
+        outsideClickMonitor = nil
+    }
+    private func closePanel() {
+        guard popover.isShown else { return }
+        // performClose can refuse to close a popover with a nested popover.
+        popover.close()
+    }
+    func popoverWillClose(_ notification: Notification) {
         presentation.selectedLight = nil
         presentation.showsPollutants = false
         presentation.showsDysonOscillation = false
         presentation.showsDysonHistory = false
+        stopMonitoringPanelEvents()
+    }
+    func applicationDidResignActive(_ notification: Notification) {
+        closePanel()
     }
     @objc private func openSettings() { showSettings(nil) }
     private func showSettings(_ kind: DeviceKind?) {
-        popover.performClose(nil)
+        closePanel()
         if let kind { wizard.begin(kind) }
         if settingsWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 660, height: 540), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
@@ -229,7 +259,7 @@ struct NetworkRecoveryPolicy {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationWillTerminate(_ notification: Notification) {
         store.stop(); wizard.cancel(); pathMonitor.cancel(); badgeTask?.cancel()
-        if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
+        stopMonitoringPanelEvents()
         if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
     }
 }
