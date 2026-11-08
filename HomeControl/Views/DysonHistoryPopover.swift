@@ -108,8 +108,9 @@ private struct DysonHistoryCharts: View {
         let today = calendar.startOfDay(for: now)
         let start = period == .today ? today : calendar.date(byAdding: .day, value: -6, to: today) ?? today
         let end = calendar.date(byAdding: .day, value: 1, to: today) ?? today.addingTimeInterval(86400)
-        let samples = data.samples.filter { $0.date >= start && $0.date < end && $0.date <= now }
-        let selection = samples.first(where: { $0.date == selectedDate }) ?? samples.last(where: { $0.hasReadings })
+        let periodSamples = data.samples.filter { $0.date >= start && $0.date < end && $0.date <= now }
+        let latestIndex = periodSamples.lastIndex { metric.value(in: $0) != nil || $0.speed != nil }
+            ?? periodSamples.lastIndex(where: \.hasReadings)
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text(period == .today ? today.formatted(date: .abbreviated, time: .omitted)
@@ -125,8 +126,13 @@ private struct DysonHistoryCharts: View {
                 .onChange(of: period) { selectedDate = nil }
             }
 
-            if let selection {
-                let ticks = timeTicks(start: start, end: end)
+            if let latestIndex {
+                let samples = Array(periodSamples[...latestIndex])
+                let latest = periodSamples[latestIndex]
+                let selection = samples.first(where: { $0.date == selectedDate }) ?? latest
+                let chartStart = min(start, latest.date.addingTimeInterval(-DysonHistory.interval))
+                let domain = chartStart...latest.date
+                let ticks = timeTicks(start: start, end: latest.date)
                 readout(selection, samples: samples)
                 HStack {
                     Text("Metric").font(.subheadline.weight(.semibold))
@@ -141,7 +147,7 @@ private struct DysonHistoryCharts: View {
                 let metricLabel = metric.unit.isEmpty ? metric.title : "\(metric.title) (\(metric.unit))"
                 DysonHistoryChart(
                     title: metricLabel, tint: metric.tint, series: series(samples, value: metric.value),
-                    domain: start...end, ticks: ticks, selected: selection.date,
+                    domain: domain, ticks: ticks, selected: selection.date,
                     selectedValue: metric.value(in: selection), showsTimeLabels: false, weekly: period == .week,
                     metric: metric,
                     select: { select($0, in: samples) }
@@ -152,9 +158,9 @@ private struct DysonHistoryCharts: View {
                     Text("15-minute average").font(.caption).foregroundStyle(.secondary)
                 }
                 DysonHistoryChart(
-                    title: String(localized: "Airflow speed"), tint: .blue, series: series(samples) { $0.speed },
-                    domain: start...end, ticks: ticks, selected: selection.date,
-                    selectedValue: selection.speed, showsTimeLabels: true, weekly: period == .week, maximum: 10,
+                    title: String(localized: "Airflow speed"), tint: .blue, series: series(samples, value: displayedSpeed),
+                    domain: domain, ticks: ticks, selected: selection.date,
+                    selectedValue: displayedSpeed(selection), showsTimeLabels: true, weekly: period == .week, maximum: 10,
                     select: { select($0, in: samples) }
                 )
             } else {
@@ -171,7 +177,7 @@ private struct DysonHistoryCharts: View {
         let reading = metric == .airQuality
             ? value.flatMap { metric.quality(for: $0) }?.title ?? "—"
             : "\(metric.title) \(formatted(value, unit: metric.unit))"
-        let speed = formatted(sample.speed)
+        let speed = formatted(displayedSpeed(sample))
         return HStack(spacing: 8) {
             Text(time).fontWeight(.medium)
             Spacer(minLength: 4)
@@ -195,6 +201,10 @@ private struct DysonHistoryCharts: View {
             @unknown default: break
             }
         }
+    }
+
+    private func displayedSpeed(_ sample: DysonHistory.Sample) -> Double? {
+        sample.speed?.rounded()
     }
 
     private func formatted(_ value: Double?, unit: String = "") -> String {
@@ -349,12 +359,17 @@ private struct DysonHistoryChart: View {
             GeometryReader { geometry in
                 if let plot = proxy.plotFrame {
                     let bounds = geometry[plot]
+                    let lastDate = series.last?.id ?? domain.upperBound
                     Rectangle().fill(.clear)
                         .frame(width: bounds.width, height: bounds.height)
                         .contentShape(Rectangle())
                         .onContinuousHover { phase in
-                            if case .active(let point) = phase,
-                               let date = proxy.value(atX: point.x, as: Date.self) { select(date) }
+                            guard case .active(let point) = phase else { return }
+                            if let lastX = proxy.position(forX: lastDate), point.x >= lastX {
+                                select(lastDate)
+                            } else if let date = proxy.value(atX: point.x, as: Date.self) {
+                                select(date)
+                            }
                         }
                         .position(x: bounds.midX, y: bounds.midY)
                         .accessibilityHidden(true)
